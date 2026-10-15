@@ -204,6 +204,12 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
     }
   }, [localStream, currentUser, currentUser?.cameraOn, currentUser?.micOn]);
 
+  const remoteMemberIds = members
+    .filter((m) => m.id !== currentUserId)
+    .map((m) => m.id)
+    .sort();
+  const remoteMemberIdsKey = remoteMemberIds.join(",");
+
   // WebRTC Mesh Signaling via Cloud Firestore (Cross-device) and BroadcastChannel (Same-device)
   useEffect(() => {
     if (!roomId || !localStream || typeof window === "undefined") return;
@@ -232,7 +238,15 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
     };
 
     const getOrCreatePC = (remoteId: string): RTCPeerConnection => {
-      if (pcsRef.current[remoteId]) return pcsRef.current[remoteId];
+      const existing = pcsRef.current[remoteId];
+      if (existing && existing.connectionState !== "closed" && existing.connectionState !== "failed") {
+        return existing;
+      }
+      if (existing) {
+        try {
+          existing.close();
+        } catch {}
+      }
 
       const pc = new RTCPeerConnection(ICE_SERVERS);
 
@@ -256,7 +270,7 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
       };
 
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
           setRemoteStreams((prev) => {
             const next = { ...prev };
             delete next[remoteId];
@@ -335,7 +349,6 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
           if (change.type === "added") {
             const data = change.doc.data() as any;
             handleSignal(data);
-            // Delete processed signal to prevent collection growth
             deleteDoc(change.doc.ref).catch(() => {});
           }
         });
@@ -345,18 +358,33 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
       }
     );
 
-    // 3. Perfect negotiation: initiator sends offer to peers with greater IDs
-    members.forEach(async (member) => {
-      if (member.id === currentUserId) return;
-      // Initiator is the peer with smaller ID (consistent deterministic tie-break)
-      const isInitiator = currentUserId < member.id;
+    // 3. Clean up connections for peers who left the room
+    const currentPeers = new Set(remoteMemberIds);
+    Object.keys(pcsRef.current).forEach((peerId) => {
+      if (!currentPeers.has(peerId)) {
+        try {
+          pcsRef.current[peerId].close();
+        } catch {}
+        delete pcsRef.current[peerId];
+        delete candidateQueuesRef.current[peerId];
+        setRemoteStreams((prev) => {
+          const next = { ...prev };
+          delete next[peerId];
+          return next;
+        });
+      }
+    });
+
+    // 4. Perfect negotiation: initiator sends offer to peers with greater IDs
+    remoteMemberIds.forEach(async (peerId) => {
+      const isInitiator = currentUserId < peerId;
       if (isInitiator) {
-        const pc = getOrCreatePC(member.id);
+        const pc = getOrCreatePC(peerId);
         try {
           const offer = await pc.createOffer();
           if (pc.signalingState === "stable" || pc.signalingState === "have-local-offer") {
             await pc.setLocalDescription(offer);
-            await sendSignal(member.id, "offer", offer);
+            await sendSignal(peerId, "offer", offer);
           }
         } catch (e) {
           console.warn("Offer creation error:", e);
@@ -368,11 +396,15 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
       bc?.removeEventListener("message", onBcMessage);
       bc?.close();
       unsubscribeFirestore();
-      Object.values(pcsRef.current).forEach((pc) => pc.close());
+      Object.values(pcsRef.current).forEach((pc) => {
+        try {
+          pc.close();
+        } catch {}
+      });
       pcsRef.current = {};
       candidateQueuesRef.current = {};
     };
-  }, [roomId, currentUserId, localStream, members]);
+  }, [roomId, currentUserId, localStream, remoteMemberIdsKey]);
 
   const isMyMicOn = currentUser?.micOn ?? false;
   const isMyCameraOn = currentUser?.cameraOn ?? false;

@@ -4,7 +4,7 @@ import { AppNav } from "@/components/AppNav";
 import { VideoRoom } from "@/components/VideoRoom";
 import { ensureRoomFromLink, useRoom } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
-import { Copy, Send, Play, Square, ArrowLeft, Target, Lock, Users } from "lucide-react";
+import { Copy, Send, Play, Square, ArrowLeft, Target, Users } from "lucide-react";
 
 export const Route = createFileRoute("/rooms/$roomId")({
   head: () => ({
@@ -27,11 +27,22 @@ function RoomPage() {
     }
   }, [roomId, state.user]);
 
+  const [guestName, setGuestName] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("lockin.guest_name") || "";
+  });
+  const [hasJoinedGuest, setHasJoinedGuest] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(sessionStorage.getItem(`lockin.joined.${roomId}`));
+  });
+
   const {
     room,
     me,
     sendMessage,
     setGoal,
+    updateProfile,
+    leave,
     startTimer,
     stopTimer,
     toggleCamera,
@@ -43,6 +54,15 @@ function RoomPage() {
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   const myGoal = room?.members.find((m) => m.id === me.id)?.goal ?? "";
+
+  const handleGuestJoin = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const finalName = guestName.trim() || `Friend ${me.id.slice(-4)}`;
+    localStorage.setItem("lockin.guest_name", finalName);
+    sessionStorage.setItem(`lockin.joined.${roomId}`, "true");
+    updateProfile(finalName);
+    setHasJoinedGuest(true);
+  };
 
   useEffect(() => {
     if (scrollerRef.current) {
@@ -81,36 +101,54 @@ function RoomPage() {
     }
   };
 
-  if (!state.user) {
+  // If user is not logged in and has not yet confirmed their guest name
+  if (!state.user && !hasJoinedGuest) {
     return (
       <div className="min-h-screen bg-background flex flex-col">
         <AppNav />
         <main className="flex-1 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-card border border-border rounded-2xl p-8 shadow-soft text-center space-y-6">
             <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
-              <Lock className="size-8" />
+              <Users className="size-8" />
             </div>
             <div className="space-y-2">
+              <div className="text-xs font-semibold text-primary uppercase tracking-wider">
+                Focus Session #{roomId}
+              </div>
               <h1 className="text-2xl font-bold font-display text-foreground">
-                Account Required
+                Join Study Room
               </h1>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                This focus room is private. Please log in or create an account to join the call and chat with your friends.
+                You've been invited to lock in together! Enter your display name to join the live audio, video, and chat.
               </p>
             </div>
 
-            <div className="space-y-3 pt-2">
-              <Link
-                to="/login"
+            <form onSubmit={handleGuestJoin} className="space-y-4 pt-2">
+              <div className="text-left space-y-1.5">
+                <label className="text-xs font-medium text-foreground">Your display name</label>
+                <input
+                  type="text"
+                  required
+                  value={guestName}
+                  onChange={(e) => setGuestName(e.target.value)}
+                  placeholder="e.g. Maya or Alex"
+                  className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  autoFocus
+                />
+              </div>
+
+              <button
+                type="submit"
                 className="w-full inline-flex items-center justify-center py-3 rounded-xl focus-gradient text-primary-foreground font-semibold shadow-soft hover:opacity-90 transition"
               >
-                Log In to Join Room
-              </Link>
-              <Link
-                to="/register"
-                className="w-full inline-flex items-center justify-center py-3 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-secondary/80 transition"
-              >
-                Create an Account
+                Join Focus Room
+              </button>
+            </form>
+
+            <div className="pt-2 border-t border-border flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              <span>Have an account?</span>
+              <Link to="/login" className="text-primary hover:underline font-medium">
+                Log in to track points
               </Link>
             </div>
           </div>
@@ -141,7 +179,11 @@ function RoomPage() {
       <main className="mx-auto max-w-5xl px-4 py-6 space-y-4">
         {/* Navigation & Share */}
         <div className="flex items-center justify-between gap-3">
-          <Link to="/rooms" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <Link
+            to="/rooms"
+            onClick={leave}
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
             <ArrowLeft className="size-4" /> All rooms
           </Link>
           <button
