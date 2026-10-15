@@ -23,12 +23,12 @@ function RoomsPage() {
 
   const refresh = () => setRooms(listRooms());
 
-  const onCreate = () => {
+  const onCreate = async () => {
     if (!state.user) {
       alert("Please log in or register an account to create a room.");
       return;
     }
-    const r = createRoom(name.trim() || "Focus Room");
+    const r = await createRoom(name.trim() || "Focus Room", state.user);
     setName("");
     refresh();
     window.location.href = `/rooms/${r.id}`;

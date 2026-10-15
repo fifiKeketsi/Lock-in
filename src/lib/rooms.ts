@@ -1,4 +1,17 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  query,
+  orderBy,
+  onSnapshot,
+  deleteDoc,
+} from "firebase/firestore";
+import { db } from "./firebase";
 
 export interface RoomMember {
   id: string;
@@ -30,6 +43,7 @@ export interface Room {
   id: string;
   name: string;
   createdAt: string;
+  creatorId?: string;
   members: RoomMember[];
   messages: RoomMessage[];
   timer: RoomTimer;
@@ -46,7 +60,7 @@ export interface MeProfile {
 
 export const EMOJIS = ["🦊", "🐻", "🐼", "🐸", "🦉", "🐙", "🦄", "🐧", "🐨", "🐯", "🦁", "🐰"];
 
-function loadRooms(): Record<string, Room> {
+function loadLocalRooms(): Record<string, Room> {
   if (typeof window === "undefined") return {};
   try {
     return JSON.parse(localStorage.getItem(ROOMS_KEY) || "{}");
@@ -55,7 +69,8 @@ function loadRooms(): Record<string, Room> {
   }
 }
 
-function saveRooms(r: Record<string, Room>) {
+function saveLocalRooms(r: Record<string, Room>) {
+  if (typeof window === "undefined") return;
   localStorage.setItem(ROOMS_KEY, JSON.stringify(r));
 }
 
@@ -93,6 +108,7 @@ export function getMe(authUser?: { id: string; name: string; email: string } | n
 }
 
 export function saveMe(me: MeProfile) {
+  if (typeof window === "undefined") return;
   localStorage.setItem(ME_KEY, JSON.stringify(me));
 }
 
@@ -100,136 +116,252 @@ export function generateRoomId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-export function createRoom(name: string): Room {
-  const rooms = loadRooms();
-  const room: Room = {
-    id: generateRoomId(),
+export async function createRoom(
+  name: string,
+  authUser?: { id: string; name: string; email: string } | null
+): Promise<Room> {
+  const me = getMe(authUser);
+  const roomId = generateRoomId();
+  const newRoom: Room = {
+    id: roomId,
     name: name || "Focus Room",
     createdAt: new Date().toISOString(),
+    creatorId: me.id,
+    members: [
+      {
+        id: me.id,
+        name: me.name,
+        emoji: me.emoji,
+        goal: "Focusing",
+        joinedAt: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        cameraOn: false,
+        micOn: true,
+      },
+    ],
+    messages: [],
+    timer: { running: false, durationMin: 25 },
+  };
+
+  // Cache locally
+  const local = loadLocalRooms();
+  local[roomId] = newRoom;
+  saveLocalRooms(local);
+
+  // Sync to Firestore
+  try {
+    await setDoc(doc(db, "rooms", roomId), {
+      id: newRoom.id,
+      name: newRoom.name,
+      createdAt: newRoom.createdAt,
+      creatorId: newRoom.creatorId,
+      members: newRoom.members,
+      timer: newRoom.timer,
+    });
+  } catch (err) {
+    console.warn("Firestore createRoom fallback:", err);
+  }
+
+  return newRoom;
+}
+
+export function listRooms(): Room[] {
+  return Object.values(loadLocalRooms()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function deleteRoom(id: string) {
+  const rooms = loadLocalRooms();
+  delete rooms[id];
+  saveLocalRooms(rooms);
+  try {
+    await deleteDoc(doc(db, "rooms", id));
+  } catch (err) {
+    console.warn("Error deleting room in Firestore:", err);
+  }
+}
+
+export async function ensureRoomFromLink(
+  id: string,
+  name?: string,
+  authUser?: { id: string; name: string; email: string } | null
+): Promise<Room> {
+  const me = getMe(authUser);
+  const local = loadLocalRooms();
+  if (local[id]) return local[id];
+
+  // Try checking Firestore
+  try {
+    const snap = await getDoc(doc(db, "rooms", id));
+    if (snap.exists()) {
+      const data = snap.data() as Room;
+      local[id] = { ...data, messages: [] };
+      saveLocalRooms(local);
+      return local[id];
+    }
+  } catch (err) {
+    console.warn("Firestore check room fallback:", err);
+  }
+
+  // Create room placeholder
+  const placeholder: Room = {
+    id,
+    name: name || `Focus Room #${id}`,
+    createdAt: new Date().toISOString(),
+    creatorId: me.id,
     members: [],
     messages: [],
     timer: { running: false, durationMin: 25 },
   };
-  rooms[room.id] = room;
-  saveRooms(rooms);
-  return room;
-}
+  local[id] = placeholder;
+  saveLocalRooms(local);
 
-export function listRooms(): Room[] {
-  return Object.values(loadRooms()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export function deleteRoom(id: string) {
-  const rooms = loadRooms();
-  delete rooms[id];
-  saveRooms(rooms);
-  broadcast(id);
-}
-
-const channels = new Map<string, BroadcastChannel>();
-function getChannel(roomId: string): BroadcastChannel | null {
-  if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return null;
-  let ch = channels.get(roomId);
-  if (!ch) {
-    ch = new BroadcastChannel(`lockin-room-${roomId}`);
-    channels.set(roomId, ch);
+  try {
+    await setDoc(
+      doc(db, "rooms", id),
+      {
+        id,
+        name: placeholder.name,
+        createdAt: placeholder.createdAt,
+        creatorId: placeholder.creatorId,
+        members: placeholder.members,
+        timer: placeholder.timer,
+      },
+      { merge: true }
+    );
+  } catch {
+    // Ignore
   }
-  return ch;
-}
 
-function broadcast(roomId: string) {
-  getChannel(roomId)?.postMessage({ type: "update", at: Date.now() });
+  return placeholder;
 }
 
 export function useRoom(
   roomId: string | undefined,
   authUser?: { id: string; name: string; email: string } | null
 ) {
-  const [room, setRoom] = useState<Room | null>(null);
   const me = getMe(authUser);
   const meRef = useRef<MeProfile>(me);
-
   useEffect(() => {
     meRef.current = me;
   }, [me]);
 
-  const refresh = useCallback(() => {
-    if (!roomId) {
-      setRoom(null);
-      return;
-    }
-    const rooms = loadRooms();
-    const room = rooms[roomId];
-    if (room) {
-      setRoom({
-        ...room,
-        members: room.members.map((m) => ({
-          ...m,
-          cameraOn: m.cameraOn ?? false,
-          micOn: m.micOn ?? false,
-        })),
-      });
-    } else {
-      setRoom(null);
-    }
+  const [room, setRoom] = useState<Room | null>(() => {
+    if (!roomId) return null;
+    return loadLocalRooms()[roomId] || null;
+  });
+
+  const [messages, setMessages] = useState<RoomMessage[]>([]);
+
+  // 1. Listen for real-time room metadata & members from Firestore
+  useEffect(() => {
+    if (!roomId) return;
+
+    const roomRef = doc(db, "rooms", roomId);
+    const unsubscribeRoom = onSnapshot(
+      roomRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const updatedRoom: Room = {
+            id: roomId,
+            name: data.name || "Focus Room",
+            createdAt: data.createdAt || new Date().toISOString(),
+            creatorId: data.creatorId,
+            members: (data.members || []).map((m: any) => ({
+              id: m.id,
+              name: m.name,
+              emoji: m.emoji || "🦊",
+              goal: m.goal || "",
+              joinedAt: m.joinedAt || new Date().toISOString(),
+              lastSeen: m.lastSeen || new Date().toISOString(),
+              cameraOn: Boolean(m.cameraOn),
+              micOn: Boolean(m.micOn),
+            })),
+            messages: [],
+            timer: data.timer || { running: false, durationMin: 25 },
+          };
+
+          setRoom(updatedRoom);
+
+          // Update local cache
+          const local = loadLocalRooms();
+          local[roomId] = updatedRoom;
+          saveLocalRooms(local);
+        }
+      },
+      (error) => {
+        console.warn("Firestore room snapshot error:", error);
+      }
+    );
+
+    // 2. Listen for real-time live chat messages
+    const msgQuery = query(collection(db, "rooms", roomId, "messages"), orderBy("at", "asc"));
+    const unsubscribeMessages = onSnapshot(
+      msgQuery,
+      (querySnap) => {
+        const msgs: RoomMessage[] = querySnap.docs.map((docSnap) => {
+          const d = docSnap.data();
+          return {
+            id: docSnap.id,
+            memberId: d.memberId,
+            name: d.name,
+            emoji: d.emoji || "🦊",
+            text: d.text,
+            at: d.at || new Date().toISOString(),
+          };
+        });
+        setMessages(msgs);
+      },
+      (error) => {
+        console.warn("Firestore messages snapshot error:", error);
+      }
+    );
+
+    return () => {
+      unsubscribeRoom();
+      unsubscribeMessages();
+    };
   }, [roomId]);
 
-  useEffect(() => {
-    refresh();
-    if (!roomId) return;
-    const ch = getChannel(roomId);
-    const onMsg = () => refresh();
-    ch?.addEventListener("message", onMsg);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === ROOMS_KEY) refresh();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => {
-      ch?.removeEventListener("message", onMsg);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, [roomId, refresh]);
+  // Combined room object with messages
+  const currentRoom: Room | null = room
+    ? {
+        ...room,
+        messages,
+      }
+    : null;
 
-  const update = useCallback(
-    (mut: (r: Room) => Room) => {
+  // Sync update helper to Firestore
+  const updateFirestore = useCallback(
+    async (patch: Partial<Room>) => {
       if (!roomId) return;
-      const rooms = loadRooms();
-      const cur = rooms[roomId];
-      if (!cur) return;
-      rooms[roomId] = mut(cur);
-      saveRooms(rooms);
-      broadcast(roomId);
-      setRoom(rooms[roomId]);
+      try {
+        const roomRef = doc(db, "rooms", roomId);
+        await updateDoc(roomRef, patch);
+      } catch (err) {
+        console.warn("Firestore update error:", err);
+      }
     },
     [roomId]
   );
 
   const join = useCallback(
-    (goal: string) => {
+    async (goal: string) => {
+      if (!roomId) return;
       const currentMe = meRef.current;
-      update((r) => {
-        const now = new Date().toISOString();
-        const existing = r.members.find((m) => m.id === currentMe.id);
-        const members = existing
-          ? r.members.map((m) =>
+      const now = new Date().toISOString();
+
+      setRoom((prev) => {
+        if (!prev) return prev;
+        const exists = prev.members.some((m) => m.id === currentMe.id);
+        const members: RoomMember[] = exists
+          ? prev.members.map((m) =>
               m.id === currentMe.id
-                ? {
-                    ...m,
-                    name: currentMe.name,
-                    emoji: currentMe.emoji,
-                    goal,
-                    lastSeen: now,
-                    cameraOn: m.cameraOn ?? false,
-                    micOn: m.micOn ?? false,
-                  }
+                ? { ...m, name: currentMe.name, emoji: currentMe.emoji, goal, lastSeen: now }
                 : m
             )
           : [
-              ...r.members.map((m) => ({
-                ...m,
-                cameraOn: m.cameraOn ?? false,
-                micOn: m.micOn ?? false,
-              })),
+              ...prev.members,
               {
                 id: currentMe.id,
                 name: currentMe.name,
@@ -238,93 +370,129 @@ export function useRoom(
                 joinedAt: now,
                 lastSeen: now,
                 cameraOn: false,
-                micOn: false,
+                micOn: true,
               },
             ];
-        return { ...r, members };
+
+        // Sync to Firestore
+        updateFirestore({ members });
+        return { ...prev, members };
       });
     },
-    [update]
+    [roomId, updateFirestore]
   );
 
-  const toggleCamera = useCallback(() => {
+  const leave = useCallback(async () => {
+    if (!roomId) return;
     const currentMe = meRef.current;
-    update((r) => ({
-      ...r,
-      members: r.members.map((m) =>
-        m.id === currentMe.id
-          ? { ...m, cameraOn: !(m.cameraOn ?? false) }
-          : { ...m, cameraOn: m.cameraOn ?? false, micOn: m.micOn ?? false }
-      ),
-    }));
-  }, [update]);
 
-  const toggleMic = useCallback(() => {
+    setRoom((prev) => {
+      if (!prev) return prev;
+      const members = prev.members.filter((m) => m.id !== currentMe.id);
+      updateFirestore({ members });
+      return { ...prev, members };
+    });
+  }, [roomId, updateFirestore]);
+
+  const toggleCamera = useCallback(async () => {
+    if (!roomId) return;
     const currentMe = meRef.current;
-    update((r) => ({
-      ...r,
-      members: r.members.map((m) =>
-        m.id === currentMe.id
-          ? { ...m, micOn: !(m.micOn ?? false) }
-          : { ...m, cameraOn: m.cameraOn ?? false, micOn: m.micOn ?? false }
-      ),
-    }));
-  }, [update]);
 
-  const leave = useCallback(() => {
+    setRoom((prev) => {
+      if (!prev) return prev;
+      const members = prev.members.map((m) =>
+        m.id === currentMe.id ? { ...m, cameraOn: !m.cameraOn } : m
+      );
+      updateFirestore({ members });
+      return { ...prev, members };
+    });
+  }, [roomId, updateFirestore]);
+
+  const toggleMic = useCallback(async () => {
+    if (!roomId) return;
     const currentMe = meRef.current;
-    update((r) => ({ ...r, members: r.members.filter((m) => m.id !== currentMe.id) }));
-  }, [update]);
 
-  const sendMessage = useCallback(
-    (text: string) => {
-      const currentMe = meRef.current;
-      if (!text.trim()) return;
-      update((r) => ({
-        ...r,
-        messages: [
-          ...r.messages,
-          {
-            id: Math.random().toString(36).slice(2),
-            memberId: currentMe.id,
-            name: currentMe.name,
-            emoji: currentMe.emoji,
-            text: text.trim(),
-            at: new Date().toISOString(),
-          },
-        ].slice(-200),
-      }));
-    },
-    [update]
-  );
+    setRoom((prev) => {
+      if (!prev) return prev;
+      const members = prev.members.map((m) =>
+        m.id === currentMe.id ? { ...m, micOn: !m.micOn } : m
+      );
+      updateFirestore({ members });
+      return { ...prev, members };
+    });
+  }, [roomId, updateFirestore]);
 
   const setGoal = useCallback(
-    (goal: string) => {
+    async (goal: string) => {
+      if (!roomId) return;
       const currentMe = meRef.current;
-      update((r) => ({
-        ...r,
-        members: r.members.map((m) => (m.id === currentMe.id ? { ...m, goal } : m)),
-      }));
+
+      setRoom((prev) => {
+        if (!prev) return prev;
+        const members = prev.members.map((m) =>
+          m.id === currentMe.id ? { ...m, goal } : m
+        );
+        updateFirestore({ members });
+        return { ...prev, members };
+      });
     },
-    [update]
+    [roomId, updateFirestore]
   );
 
   const startTimer = useCallback(
-    (durationMin: number) => {
-      update((r) => ({
-        ...r,
-        timer: { running: true, startedAt: new Date().toISOString(), durationMin },
-      }));
+    async (durationMin: number) => {
+      const timer = {
+        running: true,
+        startedAt: new Date().toISOString(),
+        durationMin,
+      };
+      setRoom((prev) => (prev ? { ...prev, timer } : prev));
+      updateFirestore({ timer });
     },
-    [update]
+    [updateFirestore]
   );
 
-  const stopTimer = useCallback(() => {
-    update((r) => ({ ...r, timer: { ...r.timer, running: false, startedAt: undefined } }));
-  }, [update]);
+  const stopTimer = useCallback(async () => {
+    const timer = { running: false, durationMin: 25 };
+    setRoom((prev) => (prev ? { ...prev, timer } : prev));
+    updateFirestore({ timer });
+  }, [updateFirestore]);
+
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!roomId || !text.trim()) return;
+      const currentMe = meRef.current;
+
+      const newMsg: RoomMessage = {
+        id: crypto.randomUUID(),
+        memberId: currentMe.id,
+        name: currentMe.name,
+        emoji: currentMe.emoji,
+        text: text.trim(),
+        at: new Date().toISOString(),
+      };
+
+      // Optimistically add to local messages
+      setMessages((prev) => [...prev, newMsg]);
+
+      // Write to Firestore messages subcollection
+      try {
+        await addDoc(collection(db, "rooms", roomId, "messages"), {
+          memberId: currentMe.id,
+          name: currentMe.name,
+          emoji: currentMe.emoji,
+          text: text.trim(),
+          at: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn("Firestore send message error:", err);
+      }
+    },
+    [roomId]
+  );
 
   return {
-    room,
+    room: currentRoom,
     me,
     join,
     leave,
@@ -332,24 +500,7 @@ export function useRoom(
     setGoal,
     startTimer,
     stopTimer,
-    refresh,
     toggleCamera,
     toggleMic,
   };
-}
-
-export function ensureRoomFromLink(id: string, name?: string): Room {
-  const rooms = loadRooms();
-  if (!rooms[id]) {
-    rooms[id] = {
-      id,
-      name: name || "Shared Room",
-      createdAt: new Date().toISOString(),
-      members: [],
-      messages: [],
-      timer: { running: false, durationMin: 25 },
-    };
-    saveRooms(rooms);
-  }
-  return rooms[id];
 }

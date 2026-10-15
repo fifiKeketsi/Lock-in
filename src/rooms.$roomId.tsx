@@ -22,8 +22,8 @@ function RoomPage() {
 
   // Ensure a placeholder room exists locally if opened via link.
   useEffect(() => {
-    ensureRoomFromLink(roomId);
-  }, [roomId]);
+    ensureRoomFromLink(roomId, undefined, state.user);
+  }, [roomId, state.user]);
 
   const { room, me, join, leave, sendMessage, setGoal, startTimer, stopTimer, toggleCamera, toggleMic } = useRoom(roomId, state.user);
   const [goalInput, setGoalInput] = useState("");
