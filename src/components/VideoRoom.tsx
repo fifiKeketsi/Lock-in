@@ -1,25 +1,18 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { Mic, MicOff, Video, VideoOff, AlertCircle, RefreshCw } from "lucide-react";
-import {
-  collection,
-  addDoc,
-  query,
-  where,
-  onSnapshot,
-  deleteDoc,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
 
 interface VideoRoomProps {
   roomId?: string;
   members: {
     id: string;
+    peerId?: string;
     name: string;
     emoji: string;
     cameraOn: boolean;
     micOn: boolean;
   }[];
   currentUserId: string;
+  trysteroRoom?: any;
   onToggleCamera: () => void;
   onToggleMic: () => void;
 }
@@ -81,7 +74,7 @@ function RemoteVideo({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Dedicated audio element ensures microphone audio plays even if video is hidden
+  // Dedicated audio element ensures microphone audio plays continuously even if video is hidden
   useEffect(() => {
     if (audioRef.current && stream) {
       if (audioRef.current.srcObject !== stream) {
@@ -122,19 +115,17 @@ function RemoteVideo({
   );
 }
 
-const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [
-    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"] },
-  ],
-};
-
-export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onToggleMic }: VideoRoomProps) {
+export function VideoRoom({
+  members,
+  currentUserId,
+  trysteroRoom,
+  onToggleCamera,
+  onToggleMic,
+}: VideoRoomProps) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
-  const pcsRef = useRef<Record<string, RTCPeerConnection>>({});
-  const candidateQueuesRef = useRef<Record<string, RTCIceCandidateInit[]>>({});
 
   const currentUser = members.find((m) => m.id === currentUserId);
   const safeMembers = members.map((m) => ({
@@ -202,209 +193,30 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
         track.enabled = currentUser.micOn ?? false;
       });
     }
-  }, [localStream, currentUser, currentUser?.cameraOn, currentUser?.micOn]);
+  }, [localStream, currentUser?.cameraOn, currentUser?.micOn]);
 
-  const remoteMemberIds = members
-    .filter((m) => m.id !== currentUserId)
-    .map((m) => m.id)
-    .sort();
-  const remoteMemberIdsKey = remoteMemberIds.join(",");
-
-  // WebRTC Mesh Signaling via Cloud Firestore (Cross-device) and BroadcastChannel (Same-device)
+  // Connect local and remote media streams via Trystero P2P WebRTC
   useEffect(() => {
-    if (!roomId || !localStream || typeof window === "undefined") return;
+    if (!trysteroRoom || !localStream) return;
 
-    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin-webrtc-${roomId}`) : null;
+    try {
+      trysteroRoom.addStream(localStream);
+    } catch (e) {
+      console.warn("Trystero addStream warning:", e);
+    }
 
-    // Helper to send signals over Firestore + BroadcastChannel
-    const sendSignal = async (to: string, type: string, payload: any) => {
-      const signalData = {
-        from: currentUserId,
-        to,
-        type,
-        data: JSON.stringify(payload),
-        timestamp: Date.now(),
-      };
-
-      // BroadcastChannel for local tabs
-      bc?.postMessage(signalData);
-
-      // Firestore for friends over the internet
-      try {
-        await addDoc(collection(db, "rooms", roomId, "signals"), signalData);
-      } catch (e) {
-        console.warn("Signaling send error:", e);
-      }
+    trysteroRoom.onPeerStream = (stream: MediaStream, peerId: string) => {
+      setRemoteStreams((prev) => ({ ...prev, [peerId]: stream }));
     };
 
-    const getOrCreatePC = (remoteId: string): RTCPeerConnection => {
-      const existing = pcsRef.current[remoteId];
-      if (existing && existing.connectionState !== "closed" && existing.connectionState !== "failed") {
-        return existing;
-      }
-      if (existing) {
-        try {
-          existing.close();
-        } catch {}
-      }
-
-      const pc = new RTCPeerConnection(ICE_SERVERS);
-
-      // Add all tracks from local stream
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
+    trysteroRoom.onPeerLeave = (peerId: string) => {
+      setRemoteStreams((prev) => {
+        const next = { ...prev };
+        delete next[peerId];
+        return next;
       });
-
-      // Handle receiving tracks from friend
-      pc.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-          setRemoteStreams((prev) => ({ ...prev, [remoteId]: event.streams[0] }));
-        }
-      };
-
-      // Handle local ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          sendSignal(remoteId, "candidate", event.candidate);
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
-          setRemoteStreams((prev) => {
-            const next = { ...prev };
-            delete next[remoteId];
-            return next;
-          });
-        }
-      };
-
-      pcsRef.current[remoteId] = pc;
-      return pc;
     };
-
-    // Signal Dispatcher
-    const handleSignal = async (signal: { from: string; to: string; type: string; data: string }) => {
-      const { from, to, type, data } = signal;
-      if (to !== currentUserId || from === currentUserId) return;
-
-      try {
-        const parsed = JSON.parse(data);
-
-        if (type === "offer") {
-          const pc = getOrCreatePC(from);
-          await pc.setRemoteDescription(new RTCSessionDescription(parsed));
-
-          // Flush any queued candidates
-          const queued = candidateQueuesRef.current[from] || [];
-          for (const cand of queued) {
-            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-          }
-          candidateQueuesRef.current[from] = [];
-
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await sendSignal(from, "answer", answer);
-        } else if (type === "answer") {
-          const pc = pcsRef.current[from];
-          if (pc && pc.signalingState === "have-local-offer") {
-            await pc.setRemoteDescription(new RTCSessionDescription(parsed));
-
-            const queued = candidateQueuesRef.current[from] || [];
-            for (const cand of queued) {
-              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-            }
-            candidateQueuesRef.current[from] = [];
-          }
-        } else if (type === "candidate") {
-          const pc = pcsRef.current[from];
-          if (pc && pc.remoteDescription) {
-            await pc.addIceCandidate(new RTCIceCandidate(parsed)).catch(() => {});
-          } else {
-            candidateQueuesRef.current[from] = candidateQueuesRef.current[from] || [];
-            candidateQueuesRef.current[from].push(parsed);
-          }
-        }
-      } catch (err) {
-        console.warn("Signal handling error:", err);
-      }
-    };
-
-    // 1. Listen for signals via BroadcastChannel
-    const onBcMessage = (event: MessageEvent) => {
-      if (event.data) handleSignal(event.data);
-    };
-    bc?.addEventListener("message", onBcMessage);
-
-    // 2. Listen for signals via Cloud Firestore
-    const q = query(
-      collection(db, "rooms", roomId, "signals"),
-      where("to", "==", currentUserId)
-    );
-
-    const unsubscribeFirestore = onSnapshot(
-      q,
-      (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === "added") {
-            const data = change.doc.data() as any;
-            handleSignal(data);
-            deleteDoc(change.doc.ref).catch(() => {});
-          }
-        });
-      },
-      (err) => {
-        console.warn("Signals listener error:", err);
-      }
-    );
-
-    // 3. Clean up connections for peers who left the room
-    const currentPeers = new Set(remoteMemberIds);
-    Object.keys(pcsRef.current).forEach((peerId) => {
-      if (!currentPeers.has(peerId)) {
-        try {
-          pcsRef.current[peerId].close();
-        } catch {}
-        delete pcsRef.current[peerId];
-        delete candidateQueuesRef.current[peerId];
-        setRemoteStreams((prev) => {
-          const next = { ...prev };
-          delete next[peerId];
-          return next;
-        });
-      }
-    });
-
-    // 4. Perfect negotiation: initiator sends offer to peers with greater IDs
-    remoteMemberIds.forEach(async (peerId) => {
-      const isInitiator = currentUserId < peerId;
-      if (isInitiator) {
-        const pc = getOrCreatePC(peerId);
-        try {
-          const offer = await pc.createOffer();
-          if (pc.signalingState === "stable" || pc.signalingState === "have-local-offer") {
-            await pc.setLocalDescription(offer);
-            await sendSignal(peerId, "offer", offer);
-          }
-        } catch (e) {
-          console.warn("Offer creation error:", e);
-        }
-      }
-    });
-
-    return () => {
-      bc?.removeEventListener("message", onBcMessage);
-      bc?.close();
-      unsubscribeFirestore();
-      Object.values(pcsRef.current).forEach((pc) => {
-        try {
-          pc.close();
-        } catch {}
-      });
-      pcsRef.current = {};
-      candidateQueuesRef.current = {};
-    };
-  }, [roomId, currentUserId, localStream, remoteMemberIdsKey]);
+  }, [trysteroRoom, localStream]);
 
   const isMyMicOn = currentUser?.micOn ?? false;
   const isMyCameraOn = currentUser?.cameraOn ?? false;
@@ -431,6 +243,10 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {safeMembers.map((member) => {
           const isMe = member.id === currentUserId;
+          const remoteStream =
+            (member.peerId && remoteStreams[member.peerId]) ||
+            remoteStreams[member.id];
+
           return (
             <div
               key={member.id}
@@ -445,7 +261,7 @@ export function VideoRoom({ roomId, members, currentUserId, onToggleCamera, onTo
                 />
               ) : (
                 <RemoteVideo
-                  stream={remoteStreams[member.id]}
+                  stream={remoteStream}
                   cameraOn={member.cameraOn}
                   emoji={member.emoji}
                   name={member.name}
