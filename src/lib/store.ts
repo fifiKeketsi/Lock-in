@@ -287,6 +287,35 @@ export function useLockIn() {
     applyTheme(theme);
   }, []);
 
+function formatAuthError(err: any): string {
+  const code = err?.code || "";
+  if (code === "auth/configuration-not-found") {
+    return "Firebase Email/Password provider is not enabled in Firebase Console. Please go to Firebase Console -> Build -> Authentication -> Sign-in method, select Email/Password, and click Enable.";
+  }
+  if (code === "auth/email-already-in-use") {
+    return "An account already exists with this email address. Please log in instead.";
+  }
+  if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
+    return "Incorrect email or password. Please try again.";
+  }
+  if (code === "auth/user-not-found") {
+    return "No account found with this email. Please register first.";
+  }
+  if (code === "auth/weak-password") {
+    return "Password is too weak. Please use at least 6 characters.";
+  }
+  if (code === "auth/invalid-email") {
+    return "Please enter a valid email address.";
+  }
+  if (code === "auth/unauthorized-domain") {
+    return "This website domain is not authorized in Firebase. Please add your Netlify URL in Firebase Console -> Build -> Authentication -> Settings -> Authorized domains.";
+  }
+  if (code === "auth/network-request-failed") {
+    return "Network error. Please check your internet connection.";
+  }
+  return err?.message || "Authentication failed. Please try again.";
+}
+
   const register = useCallback(async (email: string, password: string, name: string) => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -299,7 +328,7 @@ export function useLockIn() {
       setState((s) => ({ ...s, user }));
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || "Registration failed" };
+      return { success: false, error: formatAuthError(err) };
     }
   }, []);
 
@@ -308,7 +337,7 @@ export function useLockIn() {
       await signInWithEmailAndPassword(auth, email, password);
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || "Login failed" };
+      return { success: false, error: formatAuthError(err) };
     }
   }, []);
 
