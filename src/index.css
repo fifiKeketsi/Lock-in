@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-card: var(--card-bg);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+:root {
+  --primary: #aa3bff;
+  --primary-foreground: #ffffff;
+  --accent: #ff8c00;
+  --accent-foreground: #ffffff;
+  --success: #10b981;
+  --success-foreground: #ffffff;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --muted: #f4f3ec;
+  --muted-foreground: #6b6375;
+  --border: #e5e4e7;
+  --card-bg: #ffffff;
+  --background: #fafafa;
+  --foreground: #08060d;
+  --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+
+  --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-display: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+}
+
+.dark {
+  --primary: #c084fc;
+  --primary-foreground: #08060d;
+  --accent: #fb923c;
+  --accent-foreground: #08060d;
+  --success: #34d399;
+  --success-foreground: #08060d;
+  --destructive: #f87171;
+  --destructive-foreground: #08060d;
+  --muted: #1f2028;
+  --muted-foreground: #9ca3af;
+  --border: #2e303a;
+  --card-bg: #1e1f26;
+  --background: #121318;
+  --foreground: #f3f4f6;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* Custom Gradients & Utilities */
+.focus-gradient {
+  background: linear-gradient(135deg, #aa3bff 0%, #7a22cc 100%);
+}
+
+.dark .focus-gradient {
+  background: linear-gradient(135deg, #a855f7 0%, #6b21a8 100%);
+}
+
+.warm-gradient {
+  background: linear-gradient(135deg, #ff8c00 0%, #ff5e62 100%);
+}
+
+.card-surface {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 1.25rem; /* 20px */
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.shadow-soft {
+  box-shadow: var(--shadow);
+}
+
+/* Base custom resets */
+input, textarea, select {
+  font-family: inherit;
+}
