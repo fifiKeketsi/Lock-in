@@ -39,6 +39,7 @@ function RoomPage() {
   const {
     room,
     me,
+    firestoreError,
     sendMessage,
     setGoal,
     updateProfile,
@@ -193,6 +194,28 @@ function RoomPage() {
             <Copy className="size-4" /> Copy invite link
           </button>
         </div>
+
+        {/* Firestore Setup Diagnostic Banner */}
+        {firestoreError && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-soft">
+            <div className="space-y-0.5">
+              <div className="font-semibold text-sm flex items-center gap-1.5">
+                <span>⚠️ Firebase Cloud Firestore Database Not Created</span>
+              </div>
+              <p className="text-xs text-muted-foreground dark:text-amber-300/80 leading-relaxed">
+                To sync rooms with friends on other computers, open your Firebase console and click <strong>Create database</strong> (choose Test Mode). Testing between tabs on this computer is fully functional right now.
+              </p>
+            </div>
+            <a
+              href="https://console.firebase.google.com/project/my-app-1510c/firestore"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center justify-center px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs transition shadow-sm shrink-0"
+            >
+              Enable in Firebase Console
+            </a>
+          </div>
+        )}
 
         {/* Room Header with Live Status & Timer */}
         <header className="rounded-2xl border border-border bg-card p-5 shadow-soft">

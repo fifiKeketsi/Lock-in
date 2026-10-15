@@ -82,7 +82,6 @@ export function getMe(authUser?: { id: string; name: string; email: string } | n
     return { id: "anon", name: "Guest", emoji: "🦊" };
   }
 
-  // Pick random emoji once per device if not yet set
   let savedEmoji = "";
   let savedGuestName = "";
   try {
@@ -104,7 +103,7 @@ export function getMe(authUser?: { id: string; name: string; email: string } | n
 
   // Create a persistent unique session ID for this browser tab/device
   const userId = authUser ? authUser.id : "guest";
-  const sidKey = `lockin.sid.v3.${userId}`;
+  const sidKey = `lockin.sid.v4.${userId}`;
   let sid = sessionStorage.getItem(sidKey);
   if (!sid) {
     sid = `${userId}_${Math.random().toString(36).slice(2, 8)}`;
@@ -266,15 +265,22 @@ export function useRoom(
     meRef.current = me;
   }, [me]);
 
-  const [roomData, setRoomData] = useState<{ id: string; name: string; timer: RoomTimer } | null>(() => {
-    if (!roomId) return null;
+  const [firestoreError, setFirestoreError] = useState(false);
+
+  // Timer & Room metadata
+  const [roomData, setRoomData] = useState<{ id: string; name: string; timer: RoomTimer }>(() => {
+    if (!roomId) return { id: "room", name: "Focus Room", timer: { running: false, durationMin: 25 } };
     const l = loadLocalRooms()[roomId];
-    if (!l) return null;
-    return { id: l.id, name: l.name, timer: l.timer };
+    return {
+      id: roomId,
+      name: l?.name || `Focus Room #${roomId}`,
+      timer: l?.timer || { running: false, durationMin: 25 },
+    };
   });
 
-  const [members, setMembers] = useState<RoomMember[]>([
-    {
+  // Active participants map (keyed by participant ID)
+  const [activeMembersMap, setActiveMembersMap] = useState<Record<string, RoomMember>>(() => ({
+    [me.id]: {
       id: me.id,
       name: me.name,
       emoji: me.emoji,
@@ -284,147 +290,214 @@ export function useRoom(
       cameraOn: false,
       micOn: true,
     },
-  ]);
+  }));
 
   const [messages, setMessages] = useState<RoomMessage[]>([]);
 
-  // Real-time Firestore Room Sync with Independent Participants Collection
+  // Dual-Layer Room Sync Engine: BroadcastChannel (Instant Local) + Cloud Firestore (Cross-Device)
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || typeof window === "undefined") return;
 
     let isMounted = true;
-    const roomRef = doc(db, "rooms", roomId);
-    const participantRef = doc(db, "rooms", roomId, "participants", me.id);
+    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_room_${roomId}`) : null;
 
-    // 1. Ensure room document exists
-    setDoc(
-      roomRef,
-      {
-        id: roomId,
-        name: `Focus Room #${roomId}`,
-        timer: { running: false, durationMin: 25 },
-      },
-      { merge: true }
-    ).catch(() => {});
-
-    // 2. Register current user in the real-time participants subcollection
-    const registerPresence = async () => {
+    const myCurrentMember = (): RoomMember => {
       const currentMe = meRef.current;
-      try {
-        const snap = await getDoc(participantRef);
-        if (!snap.exists()) {
-          await setDoc(participantRef, {
-            id: currentMe.id,
-            name: currentMe.name,
-            emoji: currentMe.emoji,
-            goal: "Focusing",
-            cameraOn: false,
-            micOn: true,
-            lastSeen: Date.now(),
-            joinedAt: new Date().toISOString(),
+      const currentLocal = activeMembersMap[currentMe.id];
+      return {
+        id: currentMe.id,
+        name: currentMe.name,
+        emoji: currentMe.emoji,
+        goal: currentLocal?.goal || "Focusing",
+        joinedAt: currentLocal?.joinedAt || new Date().toISOString(),
+        lastSeen: String(Date.now()),
+        cameraOn: currentLocal?.cameraOn ?? false,
+        micOn: currentLocal?.micOn ?? true,
+      };
+    };
+
+    // 1. Listen on BroadcastChannel for instant inter-tab/window communication
+    const handleBroadcast = (e: MessageEvent) => {
+      if (!isMounted || !e.data) return;
+      const data = e.data;
+
+      if (data.type === "PRESENCE_PING") {
+        if (data.member && data.member.id !== me.id) {
+          setActiveMembersMap((prev) => ({
+            ...prev,
+            [data.member.id]: { ...data.member, lastSeen: String(Date.now()) },
+          }));
+          // Reply with PONG so the new peer immediately discovers us
+          bc?.postMessage({
+            type: "PRESENCE_PONG",
+            member: myCurrentMember(),
           });
-        } else {
-          await setDoc(
-            participantRef,
-            {
-              id: currentMe.id,
-              name: currentMe.name,
-              emoji: currentMe.emoji,
-              lastSeen: Date.now(),
-            },
-            { merge: true }
-          );
         }
-      } catch {
-        setDoc(
-          participantRef,
-          {
-            id: currentMe.id,
-            name: currentMe.name,
-            emoji: currentMe.emoji,
-            lastSeen: Date.now(),
-          },
-          { merge: true }
-        ).catch(() => {});
+      } else if (data.type === "PRESENCE_PONG") {
+        if (data.member && data.member.id !== me.id) {
+          setActiveMembersMap((prev) => ({
+            ...prev,
+            [data.member.id]: { ...data.member, lastSeen: String(Date.now()) },
+          }));
+        }
+      } else if (data.type === "PRESENCE_LEAVE") {
+        if (data.memberId && data.memberId !== me.id) {
+          setActiveMembersMap((prev) => {
+            const next = { ...prev };
+            delete next[data.memberId];
+            return next;
+          });
+        }
+      } else if (data.type === "MEMBER_PATCH") {
+        if (data.memberId) {
+          setActiveMembersMap((prev) => {
+            if (!prev[data.memberId]) return prev;
+            return {
+              ...prev,
+              [data.memberId]: {
+                ...prev[data.memberId],
+                ...data.patch,
+                lastSeen: String(Date.now()),
+              },
+            };
+          });
+        }
+      } else if (data.type === "TIMER_UPDATE") {
+        if (data.timer) {
+          setRoomData((prev) => ({ ...prev, timer: data.timer }));
+        }
+      } else if (data.type === "CHAT_MESSAGE") {
+        if (data.message) {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === data.message.id)) return prev;
+            return [...prev, data.message];
+          });
+        }
       }
     };
 
-    registerPresence();
+    bc?.addEventListener("message", handleBroadcast);
 
-    // 3. Heartbeat every 10 seconds to keep presence fresh
+    // Broadcast our presence immediately upon entering
+    bc?.postMessage({
+      type: "PRESENCE_PING",
+      member: myCurrentMember(),
+    });
+
+    // Broadcast heartbeat every 5 seconds to keep peers updated
     const heartbeat = setInterval(() => {
-      setDoc(participantRef, { lastSeen: Date.now() }, { merge: true }).catch(() => {});
+      bc?.postMessage({
+        type: "PRESENCE_PING",
+        member: myCurrentMember(),
+      });
+
+      // Filter out stale disconnects older than 30 seconds (except self)
+      const now = Date.now();
+      setActiveMembersMap((prev) => {
+        let changed = false;
+        const next: Record<string, RoomMember> = {};
+        Object.entries(prev).forEach(([id, member]) => {
+          if (id === me.id || now - Number(member.lastSeen || 0) < 30000) {
+            next[id] = member;
+          } else {
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }, 5000);
+
+    // 2. Cloud Firestore Real-time Sync (for cross-device / internet peers)
+    const roomRef = doc(db, "rooms", roomId);
+    const participantRef = doc(db, "rooms", roomId, "participants", me.id);
+
+    // Register room & participant in Firestore
+    setDoc(
+      roomRef,
+      { id: roomId, name: `Focus Room #${roomId}` },
+      { merge: true }
+    ).catch((err: any) => {
+      if (err?.code === "not-found" || err?.message?.includes("NOT_FOUND")) {
+        setFirestoreError(true);
+      }
+    });
+
+    setDoc(participantRef, myCurrentMember(), { merge: true }).catch((err: any) => {
+      if (err?.code === "not-found" || err?.message?.includes("NOT_FOUND")) {
+        setFirestoreError(true);
+      }
+    });
+
+    // Firestore participant heartbeat every 10 seconds
+    const fsHeartbeat = setInterval(() => {
+      setDoc(participantRef, { lastSeen: Date.now() }, { merge: true }).catch((err: any) => {
+        if (err?.code === "not-found" || err?.message?.includes("NOT_FOUND")) {
+          setFirestoreError(true);
+        }
+      });
     }, 10000);
 
-    // 4. Listen for real-time participants subcollection
+    // Listen to Firestore participants subcollection
     const unsubParticipants = onSnapshot(
       collection(db, "rooms", roomId, "participants"),
       (snapshot) => {
         if (!isMounted) return;
+        setFirestoreError(false);
         const now = Date.now();
-        const active: RoomMember[] = [];
-
-        snapshot.forEach((docSnap) => {
-          const d = docSnap.data();
-          const isMe = docSnap.id === me.id;
-          // Tolerate up to 2 minutes clock differences or brief network hiccups
-          const isFresh = d.lastSeen && Math.abs(now - Number(d.lastSeen)) < 120000;
-
-          if (isMe || isFresh) {
-            active.push({
-              id: docSnap.id,
-              name: d.name || "Member",
-              emoji: d.emoji || "🦊",
-              goal: d.goal || "Focusing",
-              joinedAt: d.joinedAt || new Date().toISOString(),
-              lastSeen: String(d.lastSeen || Date.now()),
-              cameraOn: Boolean(d.cameraOn),
-              micOn: Boolean(d.micOn),
-            });
-          }
-        });
-
-        // Always ensure self is in the members list
-        if (!active.some((m) => m.id === me.id)) {
-          active.unshift({
-            id: me.id,
-            name: me.name,
-            emoji: me.emoji,
-            goal: "Focusing",
-            joinedAt: new Date().toISOString(),
-            lastSeen: String(Date.now()),
-            cameraOn: false,
-            micOn: true,
+        setActiveMembersMap((prev) => {
+          const next = { ...prev };
+          snapshot.forEach((docSnap) => {
+            const d = docSnap.data();
+            const isMe = docSnap.id === me.id;
+            const isFresh = d.lastSeen && Math.abs(now - Number(d.lastSeen)) < 120000;
+            if (isMe || isFresh) {
+              next[docSnap.id] = {
+                id: docSnap.id,
+                name: d.name || "Member",
+                emoji: d.emoji || "🦊",
+                goal: d.goal || "Focusing",
+                joinedAt: d.joinedAt || new Date().toISOString(),
+                lastSeen: String(d.lastSeen || Date.now()),
+                cameraOn: Boolean(d.cameraOn),
+                micOn: Boolean(d.micOn),
+              };
+            }
           });
-        }
-
-        setMembers(active);
+          return next;
+        });
       },
       (err) => {
-        console.warn("Participants snapshot error:", err);
+        if (err?.code === "not-found" || err?.message?.includes("NOT_FOUND")) {
+          setFirestoreError(true);
+        }
       }
     );
 
-    // 5. Listen for room metadata & timer
+    // Listen to Firestore room metadata (timer)
     const unsubRoom = onSnapshot(
       roomRef,
       (docSnap) => {
         if (!isMounted) return;
+        setFirestoreError(false);
         if (docSnap.exists()) {
           const d = docSnap.data();
-          setRoomData({
-            id: roomId,
-            name: d.name || `Focus Room #${roomId}`,
-            timer: d.timer || { running: false, durationMin: 25 },
-          });
+          if (d.timer) {
+            setRoomData((prev) => ({
+              ...prev,
+              name: d.name || prev.name,
+              timer: d.timer,
+            }));
+          }
         }
       },
       (err) => {
-        console.warn("Room doc snapshot error:", err);
+        if (err?.code === "not-found" || err?.message?.includes("NOT_FOUND")) {
+          setFirestoreError(true);
+        }
       }
     );
 
-    // 6. Listen for live room messages
+    // Listen to Firestore chat messages
     const msgQuery = query(collection(db, "rooms", roomId, "messages"), orderBy("at", "asc"));
     const unsubMessages = onSnapshot(
       msgQuery,
@@ -444,12 +517,17 @@ export function useRoom(
         setMessages(msgs);
       },
       (err) => {
-        console.warn("Messages snapshot error:", err);
+        if (err?.code === "not-found" || err?.message?.includes("NOT_FOUND")) {
+          setFirestoreError(true);
+        }
       }
     );
 
-    // 7. Cleanup only when closing browser window
+    // Cleanup when closing tab
     const onBeforeUnload = () => {
+      try {
+        bc?.postMessage({ type: "PRESENCE_LEAVE", memberId: me.id });
+      } catch {}
       deleteDoc(participantRef).catch(() => {});
     };
     window.addEventListener("beforeunload", onBeforeUnload);
@@ -457,6 +535,9 @@ export function useRoom(
     return () => {
       isMounted = false;
       clearInterval(heartbeat);
+      clearInterval(fsHeartbeat);
+      bc?.removeEventListener("message", handleBroadcast);
+      bc?.close();
       unsubParticipants();
       unsubRoom();
       unsubMessages();
@@ -467,108 +548,263 @@ export function useRoom(
   // Combined room object
   const room: Room = {
     id: roomId || "room",
-    name: roomData?.name || `Focus Room #${roomId}`,
+    name: roomData.name,
     createdAt: new Date().toISOString(),
     creatorId: me.id,
-    members,
+    members: Object.values(activeMembersMap),
     messages,
-    timer: roomData?.timer || { running: false, durationMin: 25 },
+    timer: roomData.timer,
   };
 
-  const toggleCamera = useCallback(async () => {
+  const toggleCamera = useCallback(() => {
     if (!roomId) return;
-    const participantRef = doc(db, "rooms", roomId, "participants", me.id);
-    const currentMember = members.find((m) => m.id === me.id);
-    const nextState = !(currentMember?.cameraOn ?? false);
-    setDoc(participantRef, { cameraOn: nextState, lastSeen: Date.now() }, { merge: true }).catch(() => {});
-  }, [roomId, me.id, members]);
+    setActiveMembersMap((prev) => {
+      const current = prev[me.id];
+      const nextCam = !(current?.cameraOn ?? false);
+      const updated = {
+        ...(current || {
+          id: me.id,
+          name: me.name,
+          emoji: me.emoji,
+          goal: "Focusing",
+          joinedAt: new Date().toISOString(),
+          micOn: true,
+        }),
+        cameraOn: nextCam,
+        lastSeen: String(Date.now()),
+      };
 
-  const toggleMic = useCallback(async () => {
+      try {
+        const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+        bc.postMessage({
+          type: "MEMBER_PATCH",
+          memberId: me.id,
+          patch: { cameraOn: nextCam },
+        });
+        bc.close();
+      } catch {}
+
+      setDoc(
+        doc(db, "rooms", roomId, "participants", me.id),
+        { cameraOn: nextCam, lastSeen: Date.now() },
+        { merge: true }
+      ).catch(() => {});
+
+      return { ...prev, [me.id]: updated };
+    });
+  }, [roomId, me]);
+
+  const toggleMic = useCallback(() => {
     if (!roomId) return;
-    const participantRef = doc(db, "rooms", roomId, "participants", me.id);
-    const currentMember = members.find((m) => m.id === me.id);
-    const nextState = !(currentMember?.micOn ?? true);
-    setDoc(participantRef, { micOn: nextState, lastSeen: Date.now() }, { merge: true }).catch(() => {});
-  }, [roomId, me.id, members]);
+    setActiveMembersMap((prev) => {
+      const current = prev[me.id];
+      const nextMic = !(current?.micOn ?? true);
+      const updated = {
+        ...(current || {
+          id: me.id,
+          name: me.name,
+          emoji: me.emoji,
+          goal: "Focusing",
+          joinedAt: new Date().toISOString(),
+          cameraOn: false,
+        }),
+        micOn: nextMic,
+        lastSeen: String(Date.now()),
+      };
+
+      try {
+        const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+        bc.postMessage({
+          type: "MEMBER_PATCH",
+          memberId: me.id,
+          patch: { micOn: nextMic },
+        });
+        bc.close();
+      } catch {}
+
+      setDoc(
+        doc(db, "rooms", roomId, "participants", me.id),
+        { micOn: nextMic, lastSeen: Date.now() },
+        { merge: true }
+      ).catch(() => {});
+
+      return { ...prev, [me.id]: updated };
+    });
+  }, [roomId, me]);
 
   const setGoal = useCallback(
-    async (goal: string) => {
+    (goal: string) => {
       if (!roomId) return;
-      const participantRef = doc(db, "rooms", roomId, "participants", me.id);
-      setDoc(participantRef, { goal, lastSeen: Date.now() }, { merge: true }).catch(() => {});
-    },
-    [roomId, me.id]
-  );
+      setActiveMembersMap((prev) => {
+        const current = prev[me.id];
+        const updated = {
+          ...(current || {
+            id: me.id,
+            name: me.name,
+            emoji: me.emoji,
+            cameraOn: false,
+            micOn: true,
+            joinedAt: new Date().toISOString(),
+          }),
+          goal,
+          lastSeen: String(Date.now()),
+        };
 
-  const updateProfile = useCallback(
-    async (name: string, emoji?: string) => {
-      if (!roomId) return;
-      const participantRef = doc(db, "rooms", roomId, "participants", me.id);
-      const updates: any = { name, lastSeen: Date.now() };
-      if (emoji) updates.emoji = emoji;
+        try {
+          const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+          bc.postMessage({
+            type: "MEMBER_PATCH",
+            memberId: me.id,
+            patch: { goal },
+          });
+          bc.close();
+        } catch {}
 
-      const newMe = { ...me, name, emoji: emoji || me.emoji };
-      saveMe(newMe);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("lockin.guest_name", name);
-      }
-      setDoc(participantRef, updates, { merge: true }).catch(() => {});
+        setDoc(
+          doc(db, "rooms", roomId, "participants", me.id),
+          { goal, lastSeen: Date.now() },
+          { merge: true }
+        ).catch(() => {});
+
+        return { ...prev, [me.id]: updated };
+      });
     },
     [roomId, me]
   );
 
-  const leave = useCallback(async () => {
+  const updateProfile = useCallback(
+    (name: string, emoji?: string) => {
+      if (!roomId) return;
+      const newEmoji = emoji || me.emoji;
+      setActiveMembersMap((prev) => {
+        const current = prev[me.id];
+        const updated = {
+          ...(current || {
+            id: me.id,
+            goal: "Focusing",
+            cameraOn: false,
+            micOn: true,
+            joinedAt: new Date().toISOString(),
+          }),
+          name,
+          emoji: newEmoji,
+          lastSeen: String(Date.now()),
+        };
+
+        try {
+          const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+          bc.postMessage({
+            type: "MEMBER_PATCH",
+            memberId: me.id,
+            patch: { name, emoji: newEmoji },
+          });
+          bc.close();
+        } catch {}
+
+        setDoc(
+          doc(db, "rooms", roomId, "participants", me.id),
+          { name, emoji: newEmoji, lastSeen: Date.now() },
+          { merge: true }
+        ).catch(() => {});
+
+        return { ...prev, [me.id]: updated };
+      });
+
+      const newMe = { ...me, name, emoji: newEmoji };
+      saveMe(newMe);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("lockin.guest_name", name);
+      }
+    },
+    [roomId, me]
+  );
+
+  const leave = useCallback(() => {
     if (!roomId) return;
     try {
-      const participantRef = doc(db, "rooms", roomId, "participants", me.id);
-      await deleteDoc(participantRef);
-    } catch {
-      // ignore
-    }
+      const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+      bc.postMessage({ type: "PRESENCE_LEAVE", memberId: me.id });
+      bc.close();
+    } catch {}
+    deleteDoc(doc(db, "rooms", roomId, "participants", me.id)).catch(() => {});
   }, [roomId, me.id]);
 
   const startTimer = useCallback(
-    async (durationMin: number) => {
+    (durationMin: number) => {
       if (!roomId) return;
-      const roomRef = doc(db, "rooms", roomId);
+      const timer: RoomTimer = {
+        running: true,
+        startedAt: new Date().toISOString(),
+        durationMin,
+      };
+
+      setRoomData((prev) => ({ ...prev, timer }));
+
+      // 1. BroadcastChannel (Instant concurrent start across tabs)
+      try {
+        const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+        bc.postMessage({ type: "TIMER_UPDATE", timer });
+        bc.close();
+      } catch {}
+
+      // 2. Cloud Firestore (Cross-device sync)
       setDoc(
-        roomRef,
-        {
-          timer: { running: true, startedAt: new Date().toISOString(), durationMin },
-        },
+        doc(db, "rooms", roomId),
+        { timer },
         { merge: true }
       ).catch(() => {});
     },
     [roomId]
   );
 
-  const stopTimer = useCallback(async () => {
+  const stopTimer = useCallback(() => {
     if (!roomId) return;
-    const roomRef = doc(db, "rooms", roomId);
+    const timer: RoomTimer = { running: false, durationMin: 25 };
+
+    setRoomData((prev) => ({ ...prev, timer }));
+
+    // 1. BroadcastChannel
+    try {
+      const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+      bc.postMessage({ type: "TIMER_UPDATE", timer });
+      bc.close();
+    } catch {}
+
+    // 2. Cloud Firestore
     setDoc(
-      roomRef,
-      {
-        timer: { running: false, durationMin: 25 },
-      },
+      doc(db, "rooms", roomId),
+      { timer },
       { merge: true }
     ).catch(() => {});
   }, [roomId]);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    (text: string) => {
       if (!roomId || !text.trim()) return;
       const currentMe = meRef.current;
+      const newMsg: RoomMessage = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        memberId: currentMe.id,
+        name: currentMe.name,
+        emoji: currentMe.emoji,
+        text: text.trim(),
+        at: new Date().toISOString(),
+      };
+
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === newMsg.id)) return prev;
+        return [...prev, newMsg];
+      });
+
+      // 1. BroadcastChannel
       try {
-        await addDoc(collection(db, "rooms", roomId, "messages"), {
-          memberId: currentMe.id,
-          name: currentMe.name,
-          emoji: currentMe.emoji,
-          text: text.trim(),
-          at: new Date().toISOString(),
-        });
-      } catch (err) {
-        console.warn("Firestore send message warning:", err);
-      }
+        const bc = new BroadcastChannel(`lockin_room_${roomId}`);
+        bc.postMessage({ type: "CHAT_MESSAGE", message: newMsg });
+        bc.close();
+      } catch {}
+
+      // 2. Cloud Firestore
+      addDoc(collection(db, "rooms", roomId, "messages"), newMsg).catch(() => {});
     },
     [roomId]
   );
@@ -576,6 +812,7 @@ export function useRoom(
   return {
     room,
     me,
+    firestoreError,
     sendMessage,
     setGoal,
     updateProfile,
