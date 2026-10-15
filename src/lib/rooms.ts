@@ -291,118 +291,180 @@ export function useRoom(
 
   const [messages, setMessages] = useState<RoomMessage[]>([]);
 
-  // Trystero P2P Mesh Network (Connects any two browsers across the internet with 0 config)
+  const localMemberRef = useRef<RoomMember>(activeMembersMap[me.id]);
+  useEffect(() => {
+    localMemberRef.current = activeMembersMap[me.id];
+  }, [activeMembersMap, me.id]);
+
+  // Dual-Transport P2P Mesh Network: High-Speed Nostr Relays + BroadcastChannel (Local)
   useEffect(() => {
     if (!roomId || typeof window === "undefined") return;
 
     let isMounted = true;
     let roomInstance: any = null;
+    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${roomId}`) : null;
 
     try {
-      roomInstance = joinRoom({ appId: "lockin-study-network-v1" }, roomId);
+      roomInstance = joinRoom(
+        {
+          appId: "lockin-study-network-v2",
+          relayConfig: {
+            urls: [
+              "wss://relay.damus.io",
+              "wss://nos.lol",
+              "wss://relay.snort.social",
+              "wss://relay.primal.net",
+              "wss://nostr.wine",
+            ],
+            warnOnRelayFailure: false,
+          },
+        },
+        roomId
+      );
       setTrysteroRoom(roomInstance);
     } catch (err) {
       console.warn("Trystero initialization error:", err);
-      return;
     }
 
-    const presenceAction = roomInstance.makeAction("presence");
-    const timerAction = roomInstance.makeAction("timer");
-    const chatAction = roomInstance.makeAction("chat");
-    const patchAction = roomInstance.makeAction("patch");
+    const presenceAction = roomInstance?.makeAction("presence");
+    const timerAction = roomInstance?.makeAction("timer");
+    const chatAction = roomInstance?.makeAction("chat");
+    const patchAction = roomInstance?.makeAction("patch");
 
     const getMyMember = (): RoomMember => {
       const currentMe = meRef.current;
-      const currentLocal = activeMembersMap[currentMe.id];
+      const local = localMemberRef.current;
       return {
         id: currentMe.id,
         name: currentMe.name,
         emoji: currentMe.emoji,
-        goal: currentLocal?.goal || "Focusing",
-        joinedAt: currentLocal?.joinedAt || new Date().toISOString(),
+        goal: local?.goal || "Focusing",
+        joinedAt: local?.joinedAt || new Date().toISOString(),
         lastSeen: String(Date.now()),
-        cameraOn: currentLocal?.cameraOn ?? false,
-        micOn: currentLocal?.micOn ?? true,
+        cameraOn: local?.cameraOn ?? false,
+        micOn: local?.micOn ?? true,
       };
     };
 
-    // When another user connects to this room ID anywhere on earth:
-    roomInstance.onPeerJoin = (peerId: string) => {
-      if (!isMounted) return;
-      // Send our member profile to the newcomer
-      presenceAction.send(getMyMember(), peerId);
-    };
+    // 1. Trystero Internet Mesh Peer Events
+    if (roomInstance) {
+      roomInstance.onPeerJoin = (peerId: string) => {
+        if (!isMounted) return;
+        presenceAction.send(getMyMember(), peerId);
+      };
 
-    // When a user closes tab / disconnects:
-    roomInstance.onPeerLeave = (peerId: string) => {
-      if (!isMounted) return;
-      setActiveMembersMap((prev) => {
-        const next: Record<string, RoomMember> = {};
-        Object.entries(prev).forEach(([id, member]) => {
-          if (member.peerId !== peerId) {
-            next[id] = member;
-          }
+      roomInstance.onPeerLeave = (peerId: string) => {
+        if (!isMounted) return;
+        setActiveMembersMap((prev) => {
+          const next: Record<string, RoomMember> = {};
+          Object.entries(prev).forEach(([id, member]) => {
+            if (member.peerId !== peerId) {
+              next[id] = member;
+            }
+          });
+          return next;
         });
-        return next;
-      });
-    };
+      };
 
-    // Receive presence announcement from peer
-    presenceAction.onMessage = (peerMember: RoomMember, peerId: string) => {
-      if (!isMounted || !peerMember || peerMember.id === me.id) return;
-      setActiveMembersMap((prev) => ({
-        ...prev,
-        [peerMember.id]: {
-          ...peerMember,
-          peerId,
-          lastSeen: String(Date.now()),
-        },
-      }));
-      // Announce back so the connection is bidirectional
-      presenceAction.send(getMyMember(), peerId);
-    };
-
-    // Receive synchronized timer start/stop from peer
-    timerAction.onMessage = (timer: RoomTimer) => {
-      if (!isMounted || !timer) return;
-      setRoomData((prev) => ({ ...prev, timer }));
-    };
-
-    // Receive chat message from peer
-    chatAction.onMessage = (msg: RoomMessage) => {
-      if (!isMounted || !msg) return;
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, msg];
-      });
-    };
-
-    // Receive status toggle (mic, camera, goal) from peer
-    patchAction.onMessage = (data: { memberId: string; patch: Partial<RoomMember> }) => {
-      if (!isMounted || !data?.memberId) return;
-      setActiveMembersMap((prev) => {
-        if (!prev[data.memberId]) return prev;
-        return {
+      presenceAction.onMessage = (peerMember: RoomMember, peerId: string) => {
+        if (!isMounted || !peerMember || peerMember.id === me.id) return;
+        setActiveMembersMap((prev) => ({
           ...prev,
-          [data.memberId]: {
-            ...prev[data.memberId],
-            ...data.patch,
+          [peerMember.id]: {
+            ...peerMember,
+            peerId,
             lastSeen: String(Date.now()),
           },
-        };
-      });
+        }));
+        presenceAction.send(getMyMember(), peerId);
+      };
+
+      timerAction.onMessage = (timer: RoomTimer) => {
+        if (!isMounted || !timer) return;
+        setRoomData((prev) => ({ ...prev, timer }));
+      };
+
+      chatAction.onMessage = (msg: RoomMessage) => {
+        if (!isMounted || !msg) return;
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          return [...prev, msg];
+        });
+      };
+
+      patchAction.onMessage = (data: { memberId: string; patch: Partial<RoomMember> }) => {
+        if (!isMounted || !data?.memberId) return;
+        setActiveMembersMap((prev) => {
+          if (!prev[data.memberId]) return prev;
+          return {
+            ...prev,
+            [data.memberId]: {
+              ...prev[data.memberId],
+              ...data.patch,
+              lastSeen: String(Date.now()),
+            },
+          };
+        });
+      };
+    }
+
+    // 2. BroadcastChannel Local Mesh Events (Instant 0ms inter-tab)
+    const handleBcMessage = (e: MessageEvent) => {
+      if (!isMounted || !e.data) return;
+      const data = e.data;
+      if (data.type === "PRESENCE" && data.member && data.member.id !== me.id) {
+        setActiveMembersMap((prev) => ({
+          ...prev,
+          [data.member.id]: { ...data.member, lastSeen: String(Date.now()) },
+        }));
+        if (data.isPing) {
+          bc?.postMessage({ type: "PRESENCE", member: getMyMember(), isPing: false });
+        }
+      } else if (data.type === "TIMER" && data.timer) {
+        setRoomData((prev) => ({ ...prev, timer: data.timer }));
+      } else if (data.type === "CHAT" && data.message) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === data.message.id)) return prev;
+          return [...prev, data.message];
+        });
+      } else if (data.type === "PATCH" && data.memberId && data.patch) {
+        setActiveMembersMap((prev) => {
+          if (!prev[data.memberId]) return prev;
+          return {
+            ...prev,
+            [data.memberId]: { ...prev[data.memberId], ...data.patch, lastSeen: String(Date.now()) },
+          };
+        });
+      } else if (data.type === "LEAVE" && data.memberId && data.memberId !== me.id) {
+        setActiveMembersMap((prev) => {
+          const next = { ...prev };
+          delete next[data.memberId];
+          return next;
+        });
+      }
     };
 
-    // Periodic heartbeat every 4 seconds to announce presence
+    bc?.addEventListener("message", handleBcMessage);
+
+    // Initial announcement across both transports
+    presenceAction?.send(getMyMember());
+    bc?.postMessage({ type: "PRESENCE", member: getMyMember(), isPing: true });
+
+    // Periodic heartbeat every 3 seconds
     const heartbeat = setInterval(() => {
-      presenceAction.send(getMyMember());
-    }, 4000);
+      const current = getMyMember();
+      presenceAction?.send(current);
+      bc?.postMessage({ type: "PRESENCE", member: current, isPing: false });
+    }, 3000);
 
     return () => {
       isMounted = false;
       clearInterval(heartbeat);
+      bc?.postMessage({ type: "LEAVE", memberId: me.id });
+      bc?.removeEventListener("message", handleBcMessage);
+      bc?.close();
       try {
-        roomInstance.leave();
+        roomInstance?.leave();
       } catch {}
       setTrysteroRoom(null);
     };
