@@ -4,7 +4,7 @@ import { AppNav } from "@/components/AppNav";
 import { VideoRoom } from "@/components/VideoRoom";
 import { ensureRoomFromLink, useRoom } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
-import { Copy, Send, Play, Square, ArrowLeft, Target, Lock } from "lucide-react";
+import { Copy, Send, Play, Square, ArrowLeft, Target, Lock, Users } from "lucide-react";
 
 export const Route = createFileRoute("/rooms/$roomId")({
   head: () => ({
@@ -20,18 +20,28 @@ function RoomPage() {
   const { roomId } = useParams({ from: "/rooms/$roomId" });
   const { state } = useLockIn();
 
-  // Ensure a placeholder room exists locally if opened via link.
+  // Ensure room exists in Firestore and locally when opened
   useEffect(() => {
-    ensureRoomFromLink(roomId, undefined, state.user);
+    if (roomId) {
+      ensureRoomFromLink(roomId, undefined, state.user);
+    }
   }, [roomId, state.user]);
 
-  const { room, me, join, leave, sendMessage, setGoal, startTimer, stopTimer, toggleCamera, toggleMic } = useRoom(roomId, state.user);
-  const [goalInput, setGoalInput] = useState("");
+  const {
+    room,
+    me,
+    sendMessage,
+    setGoal,
+    startTimer,
+    stopTimer,
+    toggleCamera,
+    toggleMic,
+  } = useRoom(roomId, state.user);
+
   const [msg, setMsg] = useState("");
   const [duration, setDuration] = useState(25);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
-  const iAmIn = !!room?.members.find((m) => m.id === me.id);
   const myGoal = room?.members.find((m) => m.id === me.id)?.goal ?? "";
 
   useEffect(() => {
@@ -53,9 +63,10 @@ function RoomPage() {
     return () => clearInterval(t);
   }, [room?.timer.running]);
 
-  const liveRemaining = room?.timer.running && room.timer.startedAt
-    ? Math.max(0, new Date(room.timer.startedAt).getTime() + room.timer.durationMin * 60_000 - Date.now())
-    : remaining;
+  const liveRemaining =
+    room?.timer.running && room.timer.startedAt
+      ? Math.max(0, new Date(room.timer.startedAt).getTime() + room.timer.durationMin * 60_000 - Date.now())
+      : remaining;
 
   const mm = liveRemaining != null ? String(Math.floor(liveRemaining / 60000)).padStart(2, "0") : "--";
   const ss = liveRemaining != null ? String(Math.floor((liveRemaining % 60000) / 1000)).padStart(2, "0") : "--";
@@ -64,7 +75,7 @@ function RoomPage() {
     const url = `${window.location.origin}/rooms/${roomId}`;
     try {
       await navigator.clipboard.writeText(url);
-      alert("Link copied! Share it with a friend.");
+      alert("Room link copied! Share this link with your friends to lock in together.");
     } catch {
       prompt("Copy this link:", url);
     }
@@ -84,7 +95,7 @@ function RoomPage() {
                 Account Required
               </h1>
               <p className="text-muted-foreground text-sm leading-relaxed">
-                This focus room is private. Only users with a registered Lock-In account can join rooms created via shared link.
+                This focus room is private. Please log in or create an account to join the call and chat with your friends.
               </p>
             </div>
 
@@ -113,48 +124,69 @@ function RoomPage() {
       <div className="min-h-screen bg-background">
         <AppNav />
         <main className="mx-auto max-w-4xl px-4 py-12 text-center">
-          <p className="text-muted-foreground">Loading room…</p>
+          <div className="animate-pulse space-y-2">
+            <Users className="size-8 mx-auto text-primary opacity-60" />
+            <p className="text-muted-foreground">Connecting to room #{roomId}…</p>
+          </div>
         </main>
       </div>
     );
   }
 
+  const memberCount = room.members.length;
+
   return (
     <div className="min-h-screen bg-background">
       <AppNav />
       <main className="mx-auto max-w-5xl px-4 py-6 space-y-4">
+        {/* Navigation & Share */}
         <div className="flex items-center justify-between gap-3">
           <Link to="/rooms" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
             <ArrowLeft className="size-4" /> All rooms
           </Link>
           <button
             onClick={copyLink}
-            className="inline-flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80"
+            className="inline-flex items-center gap-2 rounded-lg focus-gradient px-3.5 py-1.5 text-sm text-primary-foreground font-medium shadow-soft hover:opacity-90 transition"
           >
             <Copy className="size-4" /> Copy invite link
           </button>
         </div>
 
+        {/* Room Header with Live Status & Timer */}
         <header className="rounded-2xl border border-border bg-card p-5 shadow-soft">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
+            <div className="space-y-1">
               <div className="text-xs text-muted-foreground">Room #{room.id}</div>
-              <h1 className="font-display text-2xl font-semibold">{room.name}</h1>
-              <p className="text-sm text-muted-foreground">
-                {room.members.length} member{room.members.length === 1 ? "" : "s"} in this room
-              </p>
+              <h1 className="font-display text-2xl font-bold tracking-tight">{room.name}</h1>
+              
+              {/* Live Member Count with pulsing indicator */}
+              <div className="flex items-center gap-2 pt-1">
+                <span className="relative flex size-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full size-2.5 bg-emerald-500"></span>
+                </span>
+                <span className="text-sm font-medium text-foreground">
+                  {memberCount} {memberCount === 1 ? "member in this room" : "members online now"}
+                </span>
+                {memberCount === 1 && (
+                  <span className="text-xs text-muted-foreground">
+                    (Share the invite link to bring your friend in!)
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="rounded-xl bg-secondary/50 px-4 py-3 text-center">
-              <div className="text-xs text-muted-foreground">Group timer</div>
-              <div className="font-display text-3xl tabular-nums">
+            {/* Synchronized Group Focus Timer */}
+            <div className="rounded-xl bg-secondary/50 px-4 py-3 text-center border border-border/50">
+              <div className="text-xs text-muted-foreground font-medium">Group timer</div>
+              <div className="font-display text-3xl tabular-nums font-bold">
                 {mm}:{ss}
               </div>
               <div className="mt-1 flex items-center justify-center gap-2">
                 {room.timer.running ? (
                   <button
                     onClick={stopTimer}
-                    className="inline-flex items-center gap-1 rounded-md bg-destructive px-2 py-1 text-xs text-destructive-foreground"
+                    className="inline-flex items-center gap-1 rounded-md bg-destructive px-3 py-1 text-xs font-semibold text-destructive-foreground hover:bg-destructive/90 transition"
                   >
                     <Square className="size-3" /> Stop
                   </button>
@@ -166,11 +198,12 @@ function RoomPage() {
                       max={90}
                       value={duration}
                       onChange={(e) => setDuration(Number(e.target.value))}
-                      className="w-14 h-7 rounded-md border border-input bg-background px-2 text-xs"
+                      className="w-14 h-7 rounded-md border border-input bg-background px-2 text-xs text-center"
+                      title="Timer duration in minutes"
                     />
                     <button
                       onClick={() => startTimer(duration)}
-                      className="inline-flex items-center gap-1 rounded-md focus-gradient px-2 py-1 text-xs text-primary-foreground"
+                      className="inline-flex items-center gap-1 rounded-md focus-gradient px-3 py-1 text-xs font-semibold text-primary-foreground hover:opacity-90 transition"
                     >
                       <Play className="size-3" /> Start
                     </button>
@@ -181,99 +214,94 @@ function RoomPage() {
           </div>
         </header>
 
-        {/* Video Room Section */}
-        {iAmIn && (
-          <section className="rounded-2xl border border-border bg-card p-4 shadow-soft">
-            <h2 className="font-display text-lg font-semibold mb-4">Video Call</h2>
-            <VideoRoom
-              roomId={roomId}
-              members={room.members}
-              currentUserId={me.id}
-              onToggleCamera={toggleCamera}
-              onToggleMic={toggleMic}
-            />
-          </section>
-        )}
-
-        <div className="grid gap-4 md:grid-cols-[1fr_1.4fr]">
-          {/* Members / goals */}
-          <section className="rounded-2xl border border-border bg-card p-4 shadow-soft space-y-3">
+        {/* Video Call Section - Always rendered and synced */}
+        <section className="rounded-2xl border border-border bg-card p-4 shadow-soft">
+          <div className="flex items-center justify-between mb-4">
             <h2 className="font-display text-lg font-semibold flex items-center gap-2">
-              <Target className="size-4" /> Today's goals
-            </h2>
-
-            {!iAmIn ? (
-              <div className="space-y-2">
-                <label className="text-sm text-muted-foreground">
-                  What will you work on this session?
-                </label>
-                <textarea
-                  value={goalInput}
-                  onChange={(e) => setGoalInput(e.target.value)}
-                  rows={2}
-                  placeholder="e.g. Finish chapter 4 problems, review flashcards"
-                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={() => join(goalInput.trim() || "Locking in")}
-                  className="w-full inline-flex items-center justify-center rounded-lg focus-gradient px-3 py-2 text-sm text-primary-foreground shadow-soft"
-                >
-                  Join room as {me.emoji} {me.name}
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <label className="text-sm text-muted-foreground">Your goal</label>
-                <div className="flex gap-2">
-                  <input
-                    defaultValue={myGoal}
-                    key={myGoal}
-                    onBlur={(e) => setGoal(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && setGoal((e.target as HTMLInputElement).value)}
-                    className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  />
-                </div>
-                <button
-                  onClick={leave}
-                  className="w-full text-xs text-muted-foreground hover:text-destructive"
-                >
-                  Leave room
-                </button>
-              </div>
-            )}
-
-            <div className="pt-2 border-t border-border space-y-2">
-              {room.members.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No one has joined yet.</p>
+              <span>Video & Audio Call</span>
+              {memberCount > 1 ? (
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  Live with friends
+                </span>
               ) : (
-                room.members.map((m) => (
-                  <div key={m.id} className="flex items-start gap-2 rounded-lg bg-secondary/40 p-2">
-                    <div className="text-2xl leading-none">{m.emoji}</div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium truncate">
-                        {m.name}
-                        {m.id === me.id && <span className="text-xs text-muted-foreground"> (you)</span>}
-                      </div>
-                      <div className="text-xs text-muted-foreground break-words">
-                        {m.goal || "—"}
-                      </div>
+                <span className="px-2 py-0.5 rounded-full text-xs text-muted-foreground bg-secondary">
+                  Waiting for friends
+                </span>
+              )}
+            </h2>
+            <div className="text-xs text-muted-foreground">
+              {memberCount} active slot{memberCount === 1 ? "" : "s"}
+            </div>
+          </div>
+
+          <VideoRoom
+            roomId={roomId}
+            members={room.members}
+            currentUserId={me.id}
+            onToggleCamera={toggleCamera}
+            onToggleMic={toggleMic}
+          />
+        </section>
+
+        {/* Goals & Chat Grid */}
+        <div className="grid gap-4 md:grid-cols-[1fr_1.4fr]">
+          {/* Members / Goals */}
+          <section className="rounded-2xl border border-border bg-card p-4 shadow-soft space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-lg font-semibold flex items-center gap-2">
+                <Target className="size-4 text-primary" /> Session Goals
+              </h2>
+              <span className="text-xs text-muted-foreground">{memberCount} in room</span>
+            </div>
+
+            {/* Quick goal editor */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Your focus goal</label>
+              <input
+                defaultValue={myGoal}
+                key={myGoal}
+                placeholder="What are you locking in on? (Press Enter to save)"
+                onBlur={(e) => setGoal(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && setGoal((e.target as HTMLInputElement).value)}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+
+            {/* Live member list */}
+            <div className="pt-2 border-t border-border space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">Participants ({memberCount})</div>
+              {room.members.map((m) => (
+                <div key={m.id} className="flex items-start gap-2.5 rounded-xl bg-secondary/40 p-2.5 border border-border/40">
+                  <div className="text-2xl leading-none">{m.emoji}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate flex items-center gap-1.5">
+                      <span>{m.name}</span>
+                      {m.id === me.id && <span className="text-xs text-muted-foreground font-normal">(you)</span>}
+                    </div>
+                    <div className="text-xs text-muted-foreground break-words mt-0.5">
+                      {m.goal || "Focusing quietly"}
                     </div>
                   </div>
-                ))
-              )}
+                </div>
+              ))}
             </div>
           </section>
 
-          {/* Chat */}
+          {/* Real-Time Live Chat */}
           <section className="rounded-2xl border border-border bg-card shadow-soft flex flex-col overflow-hidden" style={{ minHeight: 420 }}>
-            <div className="px-4 py-3 border-b border-border">
-              <h2 className="font-display text-lg font-semibold">Chat</h2>
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <h2 className="font-display text-lg font-semibold">Live Room Chat</h2>
+              <span className="text-xs text-muted-foreground">{room.messages.length} messages</span>
             </div>
-            <div ref={scrollerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2" style={{ maxHeight: 520 }}>
+
+            <div ref={scrollerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5" style={{ maxHeight: 520 }}>
               {room.messages.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  Say hi and share what you're working on today.
-                </p>
+                <div className="text-center py-12 space-y-1">
+                  <p className="text-sm font-medium text-foreground">Welcome to the room!</p>
+                  <p className="text-xs text-muted-foreground">
+                    Say hello to your friends and share what you're working on.
+                  </p>
+                </div>
               ) : (
                 room.messages.map((m) => {
                   const mine = m.memberId === me.id;
@@ -281,13 +309,13 @@ function RoomPage() {
                     <div key={m.id} className={`flex gap-2 ${mine ? "justify-end" : ""}`}>
                       {!mine && <div className="text-xl leading-none pt-1">{m.emoji}</div>}
                       <div
-                        className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
+                        className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow-sm ${
                           mine
                             ? "focus-gradient text-primary-foreground"
                             : "bg-secondary text-secondary-foreground"
                         }`}
                       >
-                        {!mine && <div className="text-xs opacity-70 mb-0.5">{m.name}</div>}
+                        {!mine && <div className="text-xs opacity-75 font-medium mb-0.5">{m.name}</div>}
                         <div className="break-words whitespace-pre-wrap">{m.text}</div>
                       </div>
                     </div>
@@ -295,28 +323,26 @@ function RoomPage() {
                 })
               )}
             </div>
+
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!iAmIn) {
-                  alert("Join the room first to send messages.");
-                  return;
-                }
+                if (!msg.trim()) return;
                 sendMessage(msg);
                 setMsg("");
               }}
-              className="border-t border-border p-3 flex gap-2"
+              className="border-t border-border p-3 flex gap-2 bg-background/50"
             >
               <input
                 value={msg}
                 onChange={(e) => setMsg(e.target.value)}
-                placeholder={iAmIn ? "Message the room…" : "Join to chat"}
-                className="flex-1 h-10 rounded-lg border border-input bg-background px-3 text-sm"
+                placeholder="Type a message to the room…"
+                className="flex-1 h-10 rounded-lg border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
               />
               <button
                 type="submit"
-                className="inline-flex items-center gap-1 rounded-lg focus-gradient px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
-                disabled={!iAmIn || !msg.trim()}
+                className="inline-flex items-center gap-1 rounded-lg focus-gradient px-3.5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50 shadow-soft hover:opacity-90 transition"
+                disabled={!msg.trim()}
               >
                 <Send className="size-4" />
               </button>

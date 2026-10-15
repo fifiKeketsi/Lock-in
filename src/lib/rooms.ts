@@ -3,7 +3,6 @@ import {
   doc,
   getDoc,
   setDoc,
-  updateDoc,
   collection,
   addDoc,
   query,
@@ -150,16 +149,20 @@ export async function createRoom(
 
   // Sync to Firestore
   try {
-    await setDoc(doc(db, "rooms", roomId), {
-      id: newRoom.id,
-      name: newRoom.name,
-      createdAt: newRoom.createdAt,
-      creatorId: newRoom.creatorId,
-      members: newRoom.members,
-      timer: newRoom.timer,
-    });
+    await setDoc(
+      doc(db, "rooms", roomId),
+      {
+        id: newRoom.id,
+        name: newRoom.name,
+        createdAt: newRoom.createdAt,
+        creatorId: newRoom.creatorId,
+        members: newRoom.members,
+        timer: newRoom.timer,
+      },
+      { merge: true }
+    );
   } catch (err) {
-    console.warn("Firestore createRoom fallback:", err);
+    console.warn("Firestore createRoom error:", err);
   }
 
   return newRoom;
@@ -187,9 +190,7 @@ export async function ensureRoomFromLink(
 ): Promise<Room> {
   const me = getMe(authUser);
   const local = loadLocalRooms();
-  if (local[id]) return local[id];
 
-  // Try checking Firestore
   try {
     const snap = await getDoc(doc(db, "rooms", id));
     if (snap.exists()) {
@@ -199,10 +200,10 @@ export async function ensureRoomFromLink(
       return local[id];
     }
   } catch (err) {
-    console.warn("Firestore check room fallback:", err);
+    console.warn("Firestore check room error:", err);
   }
 
-  // Create room placeholder
+  // Create room placeholder in Firestore if not present
   const placeholder: Room = {
     id,
     name: name || `Focus Room #${id}`,
@@ -228,8 +229,8 @@ export async function ensureRoomFromLink(
       },
       { merge: true }
     );
-  } catch {
-    // Ignore
+  } catch (err) {
+    console.warn("Firestore ensureRoom error:", err);
   }
 
   return placeholder;
@@ -252,14 +253,67 @@ export function useRoom(
 
   const [messages, setMessages] = useState<RoomMessage[]>([]);
 
-  // 1. Listen for real-time room metadata & members from Firestore
+  // Real-time Firestore room listener + AUTO-JOIN presence
   useEffect(() => {
     if (!roomId) return;
 
     const roomRef = doc(db, "rooms", roomId);
+    let isSubscribed = true;
+
+    // 1. Auto-join user to room.members in Firestore so they immediately appear in slots & count
+    const autoJoin = async () => {
+      try {
+        const docSnap = await getDoc(roomRef);
+        const currentMe = meRef.current;
+        const now = new Date().toISOString();
+
+        const myMemberEntry: RoomMember = {
+          id: currentMe.id,
+          name: currentMe.name,
+          emoji: currentMe.emoji,
+          goal: "Focusing",
+          joinedAt: now,
+          lastSeen: now,
+          cameraOn: false,
+          micOn: true,
+        };
+
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const existingMembers: RoomMember[] = data.members || [];
+          // Replace or add current user
+          const updated = [
+            ...existingMembers.filter((m) => m.id !== currentMe.id),
+            myMemberEntry,
+          ];
+          await setDoc(roomRef, { members: updated }, { merge: true });
+        } else {
+          // If room doc hasn't been created yet, initialize it with current user
+          await setDoc(
+            roomRef,
+            {
+              id: roomId,
+              name: `Focus Room #${roomId}`,
+              createdAt: now,
+              creatorId: currentMe.id,
+              members: [myMemberEntry],
+              timer: { running: false, durationMin: 25 },
+            },
+            { merge: true }
+          );
+        }
+      } catch (err) {
+        console.warn("Auto-join error:", err);
+      }
+    };
+
+    autoJoin();
+
+    // 2. Real-time snapshot listener for members, timer, and room details
     const unsubscribeRoom = onSnapshot(
       roomRef,
       (docSnap) => {
+        if (!isSubscribed) return;
         if (docSnap.exists()) {
           const data = docSnap.data();
           const updatedRoom: Room = {
@@ -294,11 +348,12 @@ export function useRoom(
       }
     );
 
-    // 2. Listen for real-time live chat messages
+    // 3. Real-time live chat listener
     const msgQuery = query(collection(db, "rooms", roomId, "messages"), orderBy("at", "asc"));
     const unsubscribeMessages = onSnapshot(
       msgQuery,
       (querySnap) => {
+        if (!isSubscribed) return;
         const msgs: RoomMessage[] = querySnap.docs.map((docSnap) => {
           const d = docSnap.data();
           return {
@@ -317,13 +372,33 @@ export function useRoom(
       }
     );
 
+    // 4. Presence cleanup on tab close / unmount
+    const handleLeave = () => {
+      try {
+        const currentMe = meRef.current;
+        getDoc(roomRef).then((snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            const remaining = (data.members || []).filter((m: any) => m.id !== currentMe.id);
+            setDoc(roomRef, { members: remaining }, { merge: true });
+          }
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener("beforeunload", handleLeave);
+
     return () => {
+      isSubscribed = false;
       unsubscribeRoom();
       unsubscribeMessages();
+      window.removeEventListener("beforeunload", handleLeave);
+      handleLeave();
     };
   }, [roomId]);
 
-  // Combined room object with messages
   const currentRoom: Room | null = room
     ? {
         ...room,
@@ -331,13 +406,13 @@ export function useRoom(
       }
     : null;
 
-  // Sync update helper to Firestore
+  // Sync changes directly to Firestore with merge: true
   const updateFirestore = useCallback(
     async (patch: Partial<Room>) => {
       if (!roomId) return;
       try {
         const roomRef = doc(db, "rooms", roomId);
-        await updateDoc(roomRef, patch);
+        await setDoc(roomRef, patch, { merge: true });
       } catch (err) {
         console.warn("Firestore update error:", err);
       }
@@ -351,92 +426,98 @@ export function useRoom(
       const currentMe = meRef.current;
       const now = new Date().toISOString();
 
-      setRoom((prev) => {
-        if (!prev) return prev;
-        const exists = prev.members.some((m) => m.id === currentMe.id);
-        const members: RoomMember[] = exists
-          ? prev.members.map((m) =>
-              m.id === currentMe.id
-                ? { ...m, name: currentMe.name, emoji: currentMe.emoji, goal, lastSeen: now }
-                : m
-            )
-          : [
-              ...prev.members,
-              {
-                id: currentMe.id,
-                name: currentMe.name,
-                emoji: currentMe.emoji,
-                goal,
-                joinedAt: now,
-                lastSeen: now,
-                cameraOn: false,
-                micOn: true,
-              },
-            ];
-
-        // Sync to Firestore
-        updateFirestore({ members });
-        return { ...prev, members };
-      });
+      try {
+        const roomRef = doc(db, "rooms", roomId);
+        const snap = await getDoc(roomRef);
+        const existingMembers: RoomMember[] = snap.exists() ? snap.data().members || [] : [];
+        const updated = [
+          ...existingMembers.filter((m) => m.id !== currentMe.id),
+          {
+            id: currentMe.id,
+            name: currentMe.name,
+            emoji: currentMe.emoji,
+            goal: goal || "Focusing",
+            joinedAt: now,
+            lastSeen: now,
+            cameraOn: false,
+            micOn: true,
+          },
+        ];
+        await setDoc(roomRef, { members: updated }, { merge: true });
+      } catch (e) {
+        console.warn("Join error:", e);
+      }
     },
-    [roomId, updateFirestore]
+    [roomId]
   );
 
   const leave = useCallback(async () => {
     if (!roomId) return;
     const currentMe = meRef.current;
-
-    setRoom((prev) => {
-      if (!prev) return prev;
-      const members = prev.members.filter((m) => m.id !== currentMe.id);
-      updateFirestore({ members });
-      return { ...prev, members };
-    });
-  }, [roomId, updateFirestore]);
+    try {
+      const roomRef = doc(db, "rooms", roomId);
+      const snap = await getDoc(roomRef);
+      if (snap.exists()) {
+        const updated = (snap.data().members || []).filter((m: any) => m.id !== currentMe.id);
+        await setDoc(roomRef, { members: updated }, { merge: true });
+      }
+    } catch (e) {
+      console.warn("Leave error:", e);
+    }
+  }, [roomId]);
 
   const toggleCamera = useCallback(async () => {
     if (!roomId) return;
     const currentMe = meRef.current;
-
-    setRoom((prev) => {
-      if (!prev) return prev;
-      const members = prev.members.map((m) =>
-        m.id === currentMe.id ? { ...m, cameraOn: !m.cameraOn } : m
-      );
-      updateFirestore({ members });
-      return { ...prev, members };
-    });
-  }, [roomId, updateFirestore]);
+    try {
+      const roomRef = doc(db, "rooms", roomId);
+      const snap = await getDoc(roomRef);
+      if (snap.exists()) {
+        const updated = (snap.data().members || []).map((m: any) =>
+          m.id === currentMe.id ? { ...m, cameraOn: !m.cameraOn } : m
+        );
+        await setDoc(roomRef, { members: updated }, { merge: true });
+      }
+    } catch (e) {
+      console.warn("Toggle camera error:", e);
+    }
+  }, [roomId]);
 
   const toggleMic = useCallback(async () => {
     if (!roomId) return;
     const currentMe = meRef.current;
-
-    setRoom((prev) => {
-      if (!prev) return prev;
-      const members = prev.members.map((m) =>
-        m.id === currentMe.id ? { ...m, micOn: !m.micOn } : m
-      );
-      updateFirestore({ members });
-      return { ...prev, members };
-    });
-  }, [roomId, updateFirestore]);
+    try {
+      const roomRef = doc(db, "rooms", roomId);
+      const snap = await getDoc(roomRef);
+      if (snap.exists()) {
+        const updated = (snap.data().members || []).map((m: any) =>
+          m.id === currentMe.id ? { ...m, micOn: !m.micOn } : m
+        );
+        await setDoc(roomRef, { members: updated }, { merge: true });
+      }
+    } catch (e) {
+      console.warn("Toggle mic error:", e);
+    }
+  }, [roomId]);
 
   const setGoal = useCallback(
     async (goal: string) => {
       if (!roomId) return;
       const currentMe = meRef.current;
-
-      setRoom((prev) => {
-        if (!prev) return prev;
-        const members = prev.members.map((m) =>
-          m.id === currentMe.id ? { ...m, goal } : m
-        );
-        updateFirestore({ members });
-        return { ...prev, members };
-      });
+      try {
+        const roomRef = doc(db, "rooms", roomId);
+        const snap = await getDoc(roomRef);
+        if (snap.exists()) {
+          const updated = (snap.data().members || []).map((m: any) =>
+            m.id === currentMe.id ? { ...m, goal } : m
+          );
+          await setDoc(roomRef, { members: updated }, { merge: true });
+        }
+      } catch (e) {
+        console.warn("Set goal error:", e);
+      }
     },
-    [roomId, updateFirestore]
+    [roomId]
   );
 
   const startTimer = useCallback(
@@ -446,16 +527,14 @@ export function useRoom(
         startedAt: new Date().toISOString(),
         durationMin,
       };
-      setRoom((prev) => (prev ? { ...prev, timer } : prev));
-      updateFirestore({ timer });
+      await updateFirestore({ timer });
     },
     [updateFirestore]
   );
 
   const stopTimer = useCallback(async () => {
     const timer = { running: false, durationMin: 25 };
-    setRoom((prev) => (prev ? { ...prev, timer } : prev));
-    updateFirestore({ timer });
+    await updateFirestore({ timer });
   }, [updateFirestore]);
 
   const sendMessage = useCallback(
@@ -463,19 +542,6 @@ export function useRoom(
       if (!roomId || !text.trim()) return;
       const currentMe = meRef.current;
 
-      const newMsg: RoomMessage = {
-        id: crypto.randomUUID(),
-        memberId: currentMe.id,
-        name: currentMe.name,
-        emoji: currentMe.emoji,
-        text: text.trim(),
-        at: new Date().toISOString(),
-      };
-
-      // Optimistically add to local messages
-      setMessages((prev) => [...prev, newMsg]);
-
-      // Write to Firestore messages subcollection
       try {
         await addDoc(collection(db, "rooms", roomId, "messages"), {
           memberId: currentMe.id,
