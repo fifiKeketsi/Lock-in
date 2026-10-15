@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -73,6 +73,8 @@ export interface LockInState {
 }
 
 const THEME_KEY = "lockin.theme.v1";
+const STATE_KEY = "lockin.state.v2";
+const USER_KEY = "lockin.user.v2";
 
 function getDefaultTheme(): Theme {
   if (typeof window === "undefined") return "system";
@@ -106,95 +108,190 @@ const defaultState: LockInState = {
   user: null,
 };
 
-let memory: LockInState = defaultState;
-const subscribers = new Set<() => void>();
-
-async function saveStateToFirestore(userId: string) {
+function loadCachedState(): LockInState {
+  if (typeof window === "undefined") return defaultState;
   try {
-    const docRef = doc(db, "users", userId);
-    await setDoc(docRef, {
-      ...memory,
-      user: memory.user, // Keep user data
-      updatedAt: Timestamp.now(),
-    }, { merge: true });
-  } catch (err) {
-    console.error("Error saving state to Firestore:", err);
-  }
-}
-
-async function loadStateFromFirestore(userId: string) {
-  try {
-    const docRef = doc(db, "users", userId);
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      return {
-        ...defaultState,
-        ...data,
-        theme: getDefaultTheme(),
-      } as LockInState;
-    } else {
-      // New user - save default state
-      await saveStateToFirestore(userId);
-      return defaultState;
-    }
-  } catch (err) {
-    console.error("Error loading state from Firestore:", err);
+    const savedState = localStorage.getItem(STATE_KEY);
+    const savedUser = localStorage.getItem(USER_KEY);
+    const parsedState = savedState ? JSON.parse(savedState) : {};
+    const parsedUser = savedUser ? JSON.parse(savedUser) : null;
+    return {
+      ...defaultState,
+      ...parsedState,
+      theme: getDefaultTheme(),
+      user: parsedUser,
+    };
+  } catch {
     return defaultState;
   }
 }
 
-function setState(updater: (s: LockInState) => LockInState) {
-  const newState = updater(memory);
-  memory = newState;
-  // Save to Firestore if user is logged in
-  if (memory.user) {
-    saveStateToFirestore(memory.user.id);
+// Global in-memory state & listeners
+let memory: LockInState = loadCachedState();
+const subscribers = new Set<() => void>();
+
+function notifySubscribers() {
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem(
+        STATE_KEY,
+        JSON.stringify({
+          tasks: memory.tasks,
+          moods: memory.moods,
+          sessions: memory.sessions,
+          pet: memory.pet,
+          points: memory.points,
+          streak: memory.streak,
+          lastActiveDay: memory.lastActiveDay,
+          badges: memory.badges,
+        })
+      );
+      if (memory.user) {
+        localStorage.setItem(USER_KEY, JSON.stringify(memory.user));
+      } else {
+        localStorage.removeItem(USER_KEY);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
   }
   subscribers.forEach((fn) => fn());
 }
 
+function subscribe(callback: () => void) {
+  subscribers.add(callback);
+  return () => {
+    subscribers.delete(callback);
+  };
+}
+
+function getSnapshot(): LockInState {
+  return memory;
+}
+
+async function saveStateToFirestore(userId: string) {
+  try {
+    const docRef = doc(db, "users", userId);
+    await Promise.race([
+      setDoc(
+        docRef,
+        {
+          tasks: memory.tasks,
+          moods: memory.moods,
+          sessions: memory.sessions,
+          pet: memory.pet,
+          points: memory.points,
+          streak: memory.streak,
+          lastActiveDay: memory.lastActiveDay,
+          badges: memory.badges,
+          user: memory.user,
+          updatedAt: Timestamp.now(),
+        },
+        { merge: true }
+      ),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3000)),
+    ]);
+  } catch (err) {
+    console.warn("Firestore sync skipped:", err);
+  }
+}
+
+async function loadStateFromFirestore(userId: string): Promise<Partial<LockInState> | null> {
+  try {
+    const docRef = doc(db, "users", userId);
+    const docSnap: any = await Promise.race([
+      getDoc(docRef),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3000)),
+    ]);
+    if (docSnap && docSnap.exists()) {
+      return docSnap.data();
+    }
+  } catch (err) {
+    console.warn("Firestore load skipped (using local cache):", err);
+  }
+  return null;
+}
+
+function setState(updater: (s: LockInState) => LockInState) {
+  memory = updater(memory);
+  notifySubscribers();
+  if (memory.user) {
+    saveStateToFirestore(memory.user.id);
+  }
+}
+
+// Initialize Global Auth & Theme listener once
+if (typeof window !== "undefined") {
+  applyTheme(memory.theme);
+
+  onAuthStateChanged(auth, async (firebaseUser) => {
+    if (firebaseUser) {
+      const user: User = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || "",
+        name: firebaseUser.displayName || memory.user?.name || firebaseUser.email?.split("@")[0] || "User",
+      };
+      // Immediately set user in memory so UI reveals logged-in status with 0ms delay
+      memory = { ...memory, user };
+      notifySubscribers();
+
+      // Background load data from Firestore (if available)
+      loadStateFromFirestore(user.id).then((remoteData) => {
+        if (remoteData) {
+          memory = {
+            ...memory,
+            ...remoteData,
+            user, // Keep guaranteed valid user
+            theme: memory.theme,
+          };
+          notifySubscribers();
+        }
+      });
+    } else {
+      memory = { ...defaultState, user: null };
+      notifySubscribers();
+    }
+  });
+
+  const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  mediaQuery.addEventListener("change", () => {
+    if (memory.theme === "system") {
+      applyTheme("system");
+    }
+  });
+}
+
+function formatAuthError(err: any): string {
+  const code = err?.code || "";
+  if (code === "auth/configuration-not-found") {
+    return "Firebase Email/Password provider is not enabled in Firebase Console. Please go to Firebase Console -> Build -> Authentication -> Sign-in method, select Email/Password, and click Enable.";
+  }
+  if (code === "auth/email-already-in-use") {
+    return "An account already exists with this email address. Please log in instead.";
+  }
+  if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
+    return "Incorrect email or password. Please try again.";
+  }
+  if (code === "auth/user-not-found") {
+    return "No account found with this email. Please register first.";
+  }
+  if (code === "auth/weak-password") {
+    return "Password is too weak. Please use at least 6 characters.";
+  }
+  if (code === "auth/invalid-email") {
+    return "Please enter a valid email address.";
+  }
+  if (code === "auth/unauthorized-domain") {
+    return "This website domain is not authorized in Firebase. Please add your Netlify URL in Firebase Console -> Build -> Authentication -> Settings -> Authorized domains.";
+  }
+  if (code === "auth/network-request-failed") {
+    return "Network error. Please check your internet connection.";
+  }
+  return err?.message || "Authentication failed. Please try again.";
+}
+
 export function useLockIn() {
-  const [, force] = useState(0);
-
-  useEffect(() => {
-    // Initialize theme
-    applyTheme(memory.theme);
-    force((n) => n + 1);
-
-    // Auth listener
-    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // Logged in - load from Firestore
-        const user: User = {
-          id: firebaseUser.uid,
-          email: firebaseUser.email || "",
-          name: firebaseUser.displayName || "You",
-        };
-        const firestoreState = await loadStateFromFirestore(user.id);
-        memory = { ...firestoreState, user };
-      } else {
-        // Not logged in - reset state
-        memory = { ...defaultState, user: null };
-      }
-      applyTheme(memory.theme);
-      force((n) => n + 1);
-    });
-
-    // Listen for system theme changes
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleSystemThemeChange = () => {
-      if (memory.theme === "system") {
-        applyTheme("system");
-      }
-    };
-    mediaQuery.addEventListener("change", handleSystemThemeChange);
-
-    return () => {
-      unsubscribeAuth();
-      mediaQuery.removeEventListener("change", handleSystemThemeChange);
-    };
-  }, []);
+  const state = useSyncExternalStore(subscribe, getSnapshot, () => defaultState);
 
   const addTask = useCallback((t: Omit<Task, "id" | "createdAt" | "status">) => {
     if (!memory.user) {
@@ -282,50 +379,20 @@ export function useLockIn() {
   }, []);
 
   const setTheme = useCallback((theme: Theme) => {
-    setState((s) => ({ ...s, theme }));
     localStorage.setItem(THEME_KEY, theme);
     applyTheme(theme);
+    setState((s) => ({ ...s, theme }));
   }, []);
-
-function formatAuthError(err: any): string {
-  const code = err?.code || "";
-  if (code === "auth/configuration-not-found") {
-    return "Firebase Email/Password provider is not enabled in Firebase Console. Please go to Firebase Console -> Build -> Authentication -> Sign-in method, select Email/Password, and click Enable.";
-  }
-  if (code === "auth/email-already-in-use") {
-    return "An account already exists with this email address. Please log in instead.";
-  }
-  if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
-    return "Incorrect email or password. Please try again.";
-  }
-  if (code === "auth/user-not-found") {
-    return "No account found with this email. Please register first.";
-  }
-  if (code === "auth/weak-password") {
-    return "Password is too weak. Please use at least 6 characters.";
-  }
-  if (code === "auth/invalid-email") {
-    return "Please enter a valid email address.";
-  }
-  if (code === "auth/unauthorized-domain") {
-    return "This website domain is not authorized in Firebase. Please add your Netlify URL in Firebase Console -> Build -> Authentication -> Settings -> Authorized domains.";
-  }
-  if (code === "auth/network-request-failed") {
-    return "Network error. Please check your internet connection.";
-  }
-  return err?.message || "Authentication failed. Please try again.";
-}
 
   const register = useCallback(async (email: string, password: string, name: string) => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      // Set display name
       const firebaseUser = userCredential.user;
-      // Create user in Firestore
-      const user: User = { id: firebaseUser.uid, email, name };
-      memory.user = user;
-      await saveStateToFirestore(user.id);
-      setState((s) => ({ ...s, user }));
+      const user: User = { id: firebaseUser.uid, email, name: name.trim() || email.split("@")[0] };
+      memory = { ...memory, user };
+      notifySubscribers();
+      // Non-blocking firestore save
+      saveStateToFirestore(user.id);
       return { success: true };
     } catch (err: any) {
       return { success: false, error: formatAuthError(err) };
@@ -334,7 +401,23 @@ function formatAuthError(err: any): string {
 
   const login = useCallback(async (email: string, password: string) => {
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+      const user: User = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || email,
+        name: firebaseUser.displayName || memory.user?.name || email.split("@")[0],
+      };
+      // Immediately set user and notify subscribers BEFORE returning
+      memory = { ...memory, user };
+      notifySubscribers();
+      // Background load
+      loadStateFromFirestore(user.id).then((remoteData) => {
+        if (remoteData) {
+          memory = { ...memory, ...remoteData, user };
+          notifySubscribers();
+        }
+      });
       return { success: true };
     } catch (err: any) {
       return { success: false, error: formatAuthError(err) };
@@ -344,17 +427,27 @@ function formatAuthError(err: any): string {
   const logout = useCallback(async () => {
     try {
       await signOut(auth);
-      setState((s) => ({ ...s, user: null }));
     } catch (err) {
       console.error("Logout error:", err);
+    } finally {
+      memory = { ...defaultState, user: null };
+      notifySubscribers();
     }
   }, []);
 
   return {
-    state: memory,
-    addTask, updateTask, completeTask, deleteTask,
-    addMood, addSession, renamePet,
-    setTheme, register, login, logout,
+    state,
+    addTask,
+    updateTask,
+    completeTask,
+    deleteTask,
+    addMood,
+    addSession,
+    renamePet,
+    setTheme,
+    register,
+    login,
+    logout,
   };
 }
 
