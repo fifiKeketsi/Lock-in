@@ -1,9 +1,11 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
 import { AppNav } from "@/components/AppNav";
-import { createRoom, listRooms, deleteRoom, getMe, saveMe } from "@/lib/rooms";
+import { createRoom, listRooms, deleteRoom, getMe, saveMe, type Room } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
 import { Users, Plus, Trash2, ArrowRight, Lock } from "lucide-react";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/rooms/")({
   head: () => ({
@@ -17,21 +19,53 @@ export const Route = createFileRoute("/rooms/")({
 
 function RoomsPage() {
   const { state } = useLockIn();
+  const navigate = useNavigate();
   const [rooms, setRooms] = useState(() => listRooms());
   const [name, setName] = useState("");
   const [me, setMe] = useState(() => getMe(state.user));
+  const [creating, setCreating] = useState(false);
 
   const refresh = () => setRooms(listRooms());
+
+  // Real-time Firestore rooms listener so new rooms show up instantly
+  useEffect(() => {
+    try {
+      const unsub = onSnapshot(
+        collection(db, "rooms"),
+        (snap) => {
+          const live: Room[] = snap.docs.map((d) => d.data() as Room);
+          if (live.length > 0) {
+            setRooms(live.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
+          }
+        },
+        (err) => {
+          console.warn("Rooms live list warning:", err);
+        }
+      );
+      return () => unsub();
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const onCreate = async () => {
     if (!state.user) {
       alert("Please log in or register an account to create a room.");
       return;
     }
-    const r = await createRoom(name.trim() || "Focus Room", state.user);
-    setName("");
-    refresh();
-    window.location.href = `/rooms/${r.id}`;
+    setCreating(true);
+    try {
+      const r = await createRoom(name.trim() || "Focus Room", state.user);
+      setName("");
+      refresh();
+      navigate({ to: "/rooms/$roomId", params: { roomId: r.id } });
+    } catch (err) {
+      console.warn("Create room error:", err);
+      // Fallback
+      window.location.href = `/rooms/ROOM${Date.now().toString(36).slice(-4).toUpperCase()}`;
+    } finally {
+      setCreating(false);
+    }
   };
 
   const updateMe = (patch: Partial<typeof me>) => {
@@ -99,13 +133,15 @@ function RoomsPage() {
               onChange={(e) => setName(e.target.value)}
               placeholder="Room name (e.g. Bio study session)"
               className="flex-1 min-w-[220px] h-11 rounded-lg border border-input bg-background px-3"
-              onKeyDown={(e) => e.key === "Enter" && onCreate()}
+              onKeyDown={(e) => e.key === "Enter" && !creating && onCreate()}
+              disabled={creating}
             />
             <button
               onClick={onCreate}
-              className="inline-flex items-center gap-2 rounded-lg focus-gradient px-4 py-2 text-primary-foreground shadow-soft hover:opacity-95"
+              disabled={creating}
+              className="inline-flex items-center gap-2 rounded-lg focus-gradient px-4 py-2 text-primary-foreground shadow-soft hover:opacity-95 disabled:opacity-50"
             >
-              <Plus className="size-4" /> Create room
+              <Plus className="size-4" /> {creating ? "Creating room…" : "Create room"}
             </button>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -129,7 +165,7 @@ function RoomsPage() {
                   <div className="min-w-0">
                     <div className="font-medium truncate">{r.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {r.members.length} member{r.members.length === 1 ? "" : "s"} · #{r.id}
+                      {(r.members || []).length} member{(r.members || []).length === 1 ? "" : "s"} · #{r.id}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
@@ -141,9 +177,9 @@ function RoomsPage() {
                       Enter <ArrowRight className="size-3.5" />
                     </Link>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (confirm(`Delete room "${r.name}"?`)) {
-                          deleteRoom(r.id);
+                          await deleteRoom(r.id);
                           refresh();
                         }
                       }}
@@ -158,9 +194,6 @@ function RoomsPage() {
             </ul>
           )}
         </section>
-
-       
-      
       </main>
     </div>
   );

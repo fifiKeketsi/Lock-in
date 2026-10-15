@@ -70,7 +70,11 @@ function loadLocalRooms(): Record<string, Room> {
 
 function saveLocalRooms(r: Record<string, Room>) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(ROOMS_KEY, JSON.stringify(r));
+  try {
+    localStorage.setItem(ROOMS_KEY, JSON.stringify(r));
+  } catch {
+    // Ignore quota errors
+  }
 }
 
 export function getMe(authUser?: { id: string; name: string; email: string } | null): MeProfile {
@@ -108,7 +112,11 @@ export function getMe(authUser?: { id: string; name: string; email: string } | n
 
 export function saveMe(me: MeProfile) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(ME_KEY, JSON.stringify(me));
+  try {
+    localStorage.setItem(ME_KEY, JSON.stringify(me));
+  } catch {
+    // ignore
+  }
 }
 
 export function generateRoomId() {
@@ -142,14 +150,14 @@ export async function createRoom(
     timer: { running: false, durationMin: 25 },
   };
 
-  // Cache locally
+  // 1. Immediately cache locally so room is ready in 0ms
   const local = loadLocalRooms();
   local[roomId] = newRoom;
   saveLocalRooms(local);
 
-  // Sync to Firestore
-  try {
-    await setDoc(
+  // 2. Non-blocking Firestore save with safety timeout
+  Promise.race([
+    setDoc(
       doc(db, "rooms", roomId),
       {
         id: newRoom.id,
@@ -160,16 +168,17 @@ export async function createRoom(
         timer: newRoom.timer,
       },
       { merge: true }
-    );
-  } catch (err) {
-    console.warn("Firestore createRoom error:", err);
-  }
+    ),
+    new Promise((resolve) => setTimeout(resolve, 1500)),
+  ]).catch((err) => {
+    console.warn("Firestore createRoom non-blocking warning:", err);
+  });
 
   return newRoom;
 }
 
 export function listRooms(): Room[] {
-  return Object.values(loadLocalRooms()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return Object.values(loadLocalRooms()).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 }
 
 export async function deleteRoom(id: string) {
@@ -177,7 +186,7 @@ export async function deleteRoom(id: string) {
   delete rooms[id];
   saveLocalRooms(rooms);
   try {
-    await deleteDoc(doc(db, "rooms", id));
+    deleteDoc(doc(db, "rooms", id)).catch(() => {});
   } catch (err) {
     console.warn("Error deleting room in Firestore:", err);
   }
@@ -192,19 +201,22 @@ export async function ensureRoomFromLink(
   const local = loadLocalRooms();
 
   try {
-    const snap = await getDoc(doc(db, "rooms", id));
-    if (snap.exists()) {
+    const snap: any = await Promise.race([
+      getDoc(doc(db, "rooms", id)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 1500)),
+    ]);
+    if (snap && snap.exists()) {
       const data = snap.data() as Room;
       local[id] = { ...data, messages: [] };
       saveLocalRooms(local);
       return local[id];
     }
   } catch (err) {
-    console.warn("Firestore check room error:", err);
+    console.warn("Firestore check room warning:", err);
   }
 
-  // Create room placeholder in Firestore if not present
-  const placeholder: Room = {
+  // Create room placeholder
+  const placeholder: Room = local[id] || {
     id,
     name: name || `Focus Room #${id}`,
     createdAt: new Date().toISOString(),
@@ -216,8 +228,9 @@ export async function ensureRoomFromLink(
   local[id] = placeholder;
   saveLocalRooms(local);
 
-  try {
-    await setDoc(
+  // Non-blocking sync to Firestore
+  Promise.race([
+    setDoc(
       doc(db, "rooms", id),
       {
         id,
@@ -228,10 +241,9 @@ export async function ensureRoomFromLink(
         timer: placeholder.timer,
       },
       { merge: true }
-    );
-  } catch (err) {
-    console.warn("Firestore ensureRoom error:", err);
-  }
+    ),
+    new Promise((resolve) => setTimeout(resolve, 1500)),
+  ]).catch(() => {});
 
   return placeholder;
 }
@@ -260,10 +272,9 @@ export function useRoom(
     const roomRef = doc(db, "rooms", roomId);
     let isSubscribed = true;
 
-    // 1. Auto-join user to room.members in Firestore so they immediately appear in slots & count
+    // 1. Auto-join presence: immediately register user to room.members
     const autoJoin = async () => {
       try {
-        const docSnap = await getDoc(roomRef);
         const currentMe = meRef.current;
         const now = new Date().toISOString();
 
@@ -278,18 +289,21 @@ export function useRoom(
           micOn: true,
         };
 
-        if (docSnap.exists()) {
+        const docSnap: any = await Promise.race([
+          getDoc(roomRef),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 1500)),
+        ]).catch(() => null);
+
+        if (docSnap && docSnap.exists()) {
           const data = docSnap.data();
           const existingMembers: RoomMember[] = data.members || [];
-          // Replace or add current user
           const updated = [
             ...existingMembers.filter((m) => m.id !== currentMe.id),
             myMemberEntry,
           ];
-          await setDoc(roomRef, { members: updated }, { merge: true });
+          setDoc(roomRef, { members: updated }, { merge: true }).catch(() => {});
         } else {
-          // If room doc hasn't been created yet, initialize it with current user
-          await setDoc(
+          setDoc(
             roomRef,
             {
               id: roomId,
@@ -300,10 +314,10 @@ export function useRoom(
               timer: { running: false, durationMin: 25 },
             },
             { merge: true }
-          );
+          ).catch(() => {});
         }
       } catch (err) {
-        console.warn("Auto-join error:", err);
+        console.warn("Auto-join warning:", err);
       }
     };
 
@@ -344,7 +358,7 @@ export function useRoom(
         }
       },
       (error) => {
-        console.warn("Firestore room snapshot error:", error);
+        console.warn("Firestore room snapshot warning:", error);
       }
     );
 
@@ -368,7 +382,7 @@ export function useRoom(
         setMessages(msgs);
       },
       (error) => {
-        console.warn("Firestore messages snapshot error:", error);
+        console.warn("Firestore messages snapshot warning:", error);
       }
     );
 
@@ -380,9 +394,9 @@ export function useRoom(
           if (snap.exists()) {
             const data = snap.data();
             const remaining = (data.members || []).filter((m: any) => m.id !== currentMe.id);
-            setDoc(roomRef, { members: remaining }, { merge: true });
+            setDoc(roomRef, { members: remaining }, { merge: true }).catch(() => {});
           }
-        });
+        }).catch(() => {});
       } catch {
         // ignore
       }
@@ -406,15 +420,14 @@ export function useRoom(
       }
     : null;
 
-  // Sync changes directly to Firestore with merge: true
   const updateFirestore = useCallback(
     async (patch: Partial<Room>) => {
       if (!roomId) return;
       try {
         const roomRef = doc(db, "rooms", roomId);
-        await setDoc(roomRef, patch, { merge: true });
+        setDoc(roomRef, patch, { merge: true }).catch(() => {});
       } catch (err) {
-        console.warn("Firestore update error:", err);
+        console.warn("Firestore update warning:", err);
       }
     },
     [roomId]
@@ -428,8 +441,8 @@ export function useRoom(
 
       try {
         const roomRef = doc(db, "rooms", roomId);
-        const snap = await getDoc(roomRef);
-        const existingMembers: RoomMember[] = snap.exists() ? snap.data().members || [] : [];
+        const snap = await getDoc(roomRef).catch(() => null);
+        const existingMembers: RoomMember[] = snap && snap.exists() ? snap.data().members || [] : [];
         const updated = [
           ...existingMembers.filter((m) => m.id !== currentMe.id),
           {
@@ -443,9 +456,9 @@ export function useRoom(
             micOn: true,
           },
         ];
-        await setDoc(roomRef, { members: updated }, { merge: true });
+        setDoc(roomRef, { members: updated }, { merge: true }).catch(() => {});
       } catch (e) {
-        console.warn("Join error:", e);
+        console.warn("Join warning:", e);
       }
     },
     [roomId]
@@ -456,13 +469,13 @@ export function useRoom(
     const currentMe = meRef.current;
     try {
       const roomRef = doc(db, "rooms", roomId);
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
+      const snap = await getDoc(roomRef).catch(() => null);
+      if (snap && snap.exists()) {
         const updated = (snap.data().members || []).filter((m: any) => m.id !== currentMe.id);
-        await setDoc(roomRef, { members: updated }, { merge: true });
+        setDoc(roomRef, { members: updated }, { merge: true }).catch(() => {});
       }
     } catch (e) {
-      console.warn("Leave error:", e);
+      console.warn("Leave warning:", e);
     }
   }, [roomId]);
 
@@ -471,15 +484,15 @@ export function useRoom(
     const currentMe = meRef.current;
     try {
       const roomRef = doc(db, "rooms", roomId);
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
+      const snap = await getDoc(roomRef).catch(() => null);
+      if (snap && snap.exists()) {
         const updated = (snap.data().members || []).map((m: any) =>
           m.id === currentMe.id ? { ...m, cameraOn: !m.cameraOn } : m
         );
-        await setDoc(roomRef, { members: updated }, { merge: true });
+        setDoc(roomRef, { members: updated }, { merge: true }).catch(() => {});
       }
     } catch (e) {
-      console.warn("Toggle camera error:", e);
+      console.warn("Toggle camera warning:", e);
     }
   }, [roomId]);
 
@@ -488,15 +501,15 @@ export function useRoom(
     const currentMe = meRef.current;
     try {
       const roomRef = doc(db, "rooms", roomId);
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
+      const snap = await getDoc(roomRef).catch(() => null);
+      if (snap && snap.exists()) {
         const updated = (snap.data().members || []).map((m: any) =>
           m.id === currentMe.id ? { ...m, micOn: !m.micOn } : m
         );
-        await setDoc(roomRef, { members: updated }, { merge: true });
+        setDoc(roomRef, { members: updated }, { merge: true }).catch(() => {});
       }
     } catch (e) {
-      console.warn("Toggle mic error:", e);
+      console.warn("Toggle mic warning:", e);
     }
   }, [roomId]);
 
@@ -506,15 +519,15 @@ export function useRoom(
       const currentMe = meRef.current;
       try {
         const roomRef = doc(db, "rooms", roomId);
-        const snap = await getDoc(roomRef);
-        if (snap.exists()) {
+        const snap = await getDoc(roomRef).catch(() => null);
+        if (snap && snap.exists()) {
           const updated = (snap.data().members || []).map((m: any) =>
             m.id === currentMe.id ? { ...m, goal } : m
           );
-          await setDoc(roomRef, { members: updated }, { merge: true });
+          setDoc(roomRef, { members: updated }, { merge: true }).catch(() => {});
         }
       } catch (e) {
-        console.warn("Set goal error:", e);
+        console.warn("Set goal warning:", e);
       }
     },
     [roomId]
@@ -551,7 +564,7 @@ export function useRoom(
           at: new Date().toISOString(),
         });
       } catch (err) {
-        console.warn("Firestore send message error:", err);
+        console.warn("Firestore send message warning:", err);
       }
     },
     [roomId]
