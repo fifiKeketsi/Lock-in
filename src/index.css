@@ -3,6 +3,8 @@
 @theme {
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-success: var(--success);
@@ -13,47 +15,115 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-card: var(--card-bg);
+  --color-card-foreground: var(--card-foreground);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  /* StudyFetch Modality Pastels */
+  --color-sf-pink: var(--sf-pink);
+  --color-sf-lemon: var(--sf-lemon);
+  --color-sf-lime: var(--sf-lime);
+  --color-sf-peach: var(--sf-peach);
+  --color-sf-teal: var(--sf-teal);
+  --color-electric-blue: var(--electric-blue);
+
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-serif: 'Newsreader', Georgia, Cambria, "Times New Roman", serif;
+  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 :root {
-  --primary: #aa3bff;
-  --primary-foreground: #ffffff;
-  --accent: #ff8c00;
-  --accent-foreground: #ffffff;
-  --success: #10b981;
-  --success-foreground: #ffffff;
-  --destructive: #ef4444;
-  --destructive-foreground: #ffffff;
-  --muted: #f4f3ec;
-  --muted-foreground: #6b6375;
-  --border: #e5e4e7;
+  /* StudyFetch Iconic Palette: Warm Parchment & Off-Black */
+  --background: #f7f6ef;
+  --foreground: #191919;
   --card-bg: #ffffff;
-  --background: #fafafa;
-  --foreground: #08060d;
-  --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --card-foreground: #191919;
+  --border: #e5e5e5;
+  --border-subtle: #eeece4;
 
-  --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --font-display: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, Consolas, monospace;
+  --primary: #191919;
+  --primary-foreground: #faf9f5;
+  --secondary: #eceae0;
+  --secondary-foreground: #191919;
+  --muted: #eceae0;
+  --muted-foreground: #716d66;
+
+  --accent: #ffca98;
+  --accent-foreground: #4a1d00;
+  --success: #6aba00;
+  --success-foreground: #1c2e00;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  /* StudyFetch Characteristic Modality Colors */
+  --sf-pink: #f5d5ff;
+  --sf-pink-dark: #3d0050;
+  --sf-pink-border: #cd8de1;
+  --sf-lemon: #f9f284;
+  --sf-lemon-dark: #604e00;
+  --sf-lemon-border: #ded877;
+  --sf-lime: #bcf887;
+  --sf-lime-dark: #1c2e00;
+  --sf-lime-border: #ace37d;
+  --sf-peach: #ffca98;
+  --sf-peach-dark: #4a1d00;
+  --sf-peach-border: #ffaa6b;
+  --sf-teal: #bbeef0;
+  --sf-teal-dark: #00363a;
+  --sf-teal-border: #a6d9db;
+  --electric-blue: #2908ff;
+
+  --radius-pill: 9999px;
+  --radius-card: 24px;
+  --radius-section: 36px;
+  --shadow-card: 0 2px 12px rgba(25, 25, 25, 0.04), 0 1px 3px rgba(25, 25, 25, 0.02);
+  --shadow-card-hover: 0 12px 32px rgba(25, 25, 25, 0.08), 0 2px 6px rgba(25, 25, 25, 0.04);
 }
 
 .dark {
-  --primary: #c084fc;
-  --primary-foreground: #08060d;
-  --accent: #fb923c;
-  --accent-foreground: #08060d;
-  --success: #34d399;
-  --success-foreground: #08060d;
+  /* StudyFetch Dark Theme: Warm Charcoal & Porcelain Text */
+  --background: #191919;
+  --foreground: #faf9f5;
+  --card-bg: #242220;
+  --card-foreground: #faf9f5;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  --primary: #faf9f5;
+  --primary-foreground: #191919;
+  --secondary: #2e2b26;
+  --secondary-foreground: #faf9f5;
+  --muted: #2e2b26;
+  --muted-foreground: #b8b4ab;
+
+  --accent: #d65500;
+  --accent-foreground: #fff5ec;
+  --success: #ace37d;
+  --success-foreground: #1c2e00;
   --destructive: #f87171;
-  --destructive-foreground: #08060d;
-  --muted: #1f2028;
-  --muted-foreground: #9ca3af;
-  --border: #2e303a;
-  --card-bg: #1e1f26;
-  --background: #121318;
-  --foreground: #f3f4f6;
+  --destructive-foreground: #450a0a;
+
+  /* StudyFetch Dark Modality Variations */
+  --sf-pink: #311e36;
+  --sf-pink-dark: #f5d5ff;
+  --sf-pink-border: #5c4262;
+  --sf-lemon: #2c2612;
+  --sf-lemon-dark: #f9f284;
+  --sf-lemon-border: #564d2c;
+  --sf-lime: #1e2b0f;
+  --sf-lime-dark: #bcf887;
+  --sf-lime-border: #40552a;
+  --sf-peach: #391f0c;
+  --sf-peach-dark: #ffca98;
+  --sf-peach-border: #6a4225;
+  --sf-teal: #002d30;
+  --sf-teal-dark: #bbeef0;
+  --sf-teal-border: #1b575a;
+  --electric-blue: #60a5fa;
+
+  --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
 body {
@@ -63,35 +133,149 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom Gradients & Utilities */
+/* StudyFetch Floating Pill Navbar */
+.sfb-nav-pill {
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sfb-nav-pill:hover {
+  border-color: color-mix(in srgb, var(--foreground) 15%, transparent);
+}
+
+/* StudyFetch Signature Cards & Bento */
+.card-surface, .sfb-card {
+  background: var(--card-bg);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+
+.card-surface:hover, .sfb-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  border-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+/* StudyFetch Modality Badges */
+.sfb-badge-pink {
+  background-color: var(--sf-pink);
+  color: var(--sf-pink-dark);
+  border: 1px solid var(--sf-pink-border);
+}
+
+.sfb-badge-lemon {
+  background-color: var(--sf-lemon);
+  color: var(--sf-lemon-dark);
+  border: 1px solid var(--sf-lemon-border);
+}
+
+.sfb-badge-lime {
+  background-color: var(--sf-lime);
+  color: var(--sf-lime-dark);
+  border: 1px solid var(--sf-lime-border);
+}
+
+.sfb-badge-peach {
+  background-color: var(--sf-peach);
+  color: var(--sf-peach-dark);
+  border: 1px solid var(--sf-peach-border);
+}
+
+.sfb-badge-teal {
+  background-color: var(--sf-teal);
+  color: var(--sf-teal-dark);
+  border: 1px solid var(--sf-teal-border);
+}
+
+/* StudyFetch Pill Buttons */
+.sfb-btn-primary {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: 9999px;
+  font-weight: 600;
+  padding: 0.625rem 1.25rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.sfb-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  opacity: 0.95;
+}
+
+.sfb-btn-primary:active {
+  transform: translateY(0);
+}
+
+.sfb-btn-secondary {
+  background-color: var(--secondary);
+  color: var(--secondary-foreground);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-weight: 500;
+  padding: 0.625rem 1.25rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sfb-btn-secondary:hover {
+  background-color: color-mix(in srgb, var(--secondary) 80%, var(--foreground) 20%);
+  transform: translateY(-1px);
+}
+
+.sfb-btn-secondary:active {
+  transform: translateY(0);
+}
+
+/* StudyFetch Gradients */
 .focus-gradient {
-  background: linear-gradient(135deg, #aa3bff 0%, #7a22cc 100%);
+  background: #191919;
 }
 
 .dark .focus-gradient {
-  background: linear-gradient(135deg, #a855f7 0%, #6b21a8 100%);
+  background: #242220;
 }
 
 .warm-gradient {
-  background: linear-gradient(135deg, #ff8c00 0%, #ff5e62 100%);
+  background: linear-gradient(135deg, #ffca98 0%, #ffd6b0 100%);
 }
 
-.card-surface {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 1.25rem; /* 20px */
-  box-shadow: var(--shadow);
-  padding: 1.5rem;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+.dark .warm-gradient {
+  background: linear-gradient(135deg, #391f0c 0%, #4a1d00 100%);
 }
 
 .shadow-soft {
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-card);
 }
 
-/* Base custom resets */
-input, textarea, select {
-  font-family: inherit;
+/* Editorial Serif Accent Class */
+.font-editorial {
+  font-family: var(--font-serif);
+}
+
+/* Subtle Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--foreground) 15%, transparent);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--foreground) 25%, transparent);
 }

@@ -34,31 +34,34 @@ function WarmupPage() {
       <div className="min-h-screen bg-background flex flex-col">
         <AppNav />
         <main className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-card border border-border rounded-2xl p-8 shadow-soft text-center space-y-6">
-            <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+          <div className="w-full max-w-md sfb-card p-8 md:p-10 text-center space-y-6">
+            <div className="mx-auto size-16 rounded-3xl sfb-badge-lemon flex items-center justify-center text-foreground">
               <Lock className="size-8" />
             </div>
             <div className="space-y-2">
+              <span className="sfb-badge-pink text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                Account Required
+              </span>
               <h1 className="text-2xl font-bold font-display text-foreground">
-                Account Required for Warm-up Games
+                Sign In to Play Warm-ups
               </h1>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                Log in or create an account to play cognitive warm-up games and track your performance.
+              <p className="text-muted-foreground text-xs leading-relaxed max-w-xs mx-auto">
+                Log in or create an account to play cognitive warm-up games and track your reaction times.
               </p>
             </div>
 
-            <div className="space-y-3 pt-2">
+            <div className="space-y-2.5 pt-2">
               <Link
                 to="/login"
-                className="w-full inline-flex items-center justify-center py-3 rounded-xl focus-gradient text-primary-foreground font-semibold shadow-soft hover:opacity-90 transition"
+                className="w-full sfb-btn-primary inline-flex items-center justify-center py-3 text-xs font-semibold"
               >
                 Log In
               </Link>
               <Link
                 to="/register"
-                className="w-full inline-flex items-center justify-center py-3 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-secondary/80 transition"
+                className="w-full sfb-btn-secondary inline-flex items-center justify-center py-3 text-xs font-semibold"
               >
-                Create an Account
+                Create Account
               </Link>
             </div>
           </div>
@@ -68,20 +71,24 @@ function WarmupPage() {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-background">
       <AppNav />
-      <main className="mx-auto max-w-3xl px-4 py-10">
-        <div className="text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-xs font-medium">
-            <Brain className="size-3" /> Cognitive warm-up
+      <main className="mx-auto max-w-3xl px-4 py-8 md:py-12 space-y-6">
+        <div className="text-center space-y-2.5">
+          <span className="sfb-badge-lemon inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+            <Brain className="size-3" /> Cognitive Priming
           </span>
-          <h1 className="mt-3 font-display text-3xl md:text-4xl font-semibold">Prime your brain</h1>
-          <p className="mt-2 text-muted-foreground max-w-md mx-auto">
-            Pick a quick game to shift from passive scrolling into active focus.
+          <h1 className="font-display text-3xl md:text-4xl font-bold text-foreground">
+            Prime your brain.<br />
+            <span className="font-editorial italic font-normal text-muted-foreground">Fast cognitive games to enter flow state.</span>
+          </h1>
+          <p className="text-xs md:text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
+            Pick a 30-second cognitive mini-game to shift your neural circuits from passive doom-scrolling into active study focus.
           </p>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 gap-2">
+        {/* Game Switcher Bento Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {GAMES.map((g) => {
             const Icon = g.icon;
             const active = game === g.id;
@@ -89,32 +96,44 @@ function WarmupPage() {
               <button
                 key={g.id}
                 onClick={() => setGame(g.id)}
-                className={`rounded-xl p-3 text-left transition-colors ${active ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-secondary/80"}`}
+                className={`rounded-2xl p-4 text-left transition-all duration-200 border ${
+                  active
+                    ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] border-transparent shadow-md scale-[1.02]"
+                    : "sfb-card hover:border-black/20 dark:hover:border-white/20"
+                }`}
               >
-                <Icon className="size-4 mb-1" />
-                <div className="font-medium text-sm">{g.name}</div>
-                <div className={`text-[11px] ${active ? "opacity-80" : "text-muted-foreground"}`}>{g.tag}</div>
+                <div className="flex items-center justify-between mb-2">
+                  <Icon className="size-4" />
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    active ? "bg-white/20 text-white dark:bg-black/20 dark:text-black" : "sfb-badge-lemon"
+                  }`}>
+                    {g.tag}
+                  </span>
+                </div>
+                <div className="font-bold text-sm">{g.name}</div>
+                <div className={`text-[11px] mt-0.5 truncate ${active ? "opacity-80" : "text-muted-foreground"}`}>
+                  {g.desc}
+                </div>
               </button>
             );
           })}
         </div>
 
-        <p className="mt-3 text-sm text-muted-foreground text-center">
-          {GAMES.find((g) => g.id === game)?.desc}
-        </p>
-
-        <div className="mt-6">
-        {game === "reaction" && <ReactionGame />}
-        {game === "sequence" && <SequenceGame />}
-        {game === "math" && <MathGame />}
-        {game === "stroop" && <StroopGame />}
-        {game === "nback" && <NBackGame />}
-        {game === "colorconnect" && <ColorConnectGame />}
+        <div className="sfb-card p-6 md:p-8">
+          {game === "reaction" && <ReactionGame />}
+          {game === "sequence" && <SequenceGame />}
+          {game === "math" && <MathGame />}
+          {game === "stroop" && <StroopGame />}
+          {game === "nback" && <NBackGame />}
+          {game === "colorconnect" && <ColorConnectGame />}
         </div>
 
-        <div className="mt-6 flex justify-end">
-          <Link to="/focus" className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium">
-            Start focus session →
+        <div className="flex justify-between items-center pt-2">
+          <Link to="/" className="text-xs font-semibold text-muted-foreground hover:text-foreground">
+            ← Back to Dashboard
+          </Link>
+          <Link to="/focus" className="sfb-btn-primary text-xs py-2.5 px-5 font-bold">
+            Start Focus Session →
           </Link>
         </div>
       </main>

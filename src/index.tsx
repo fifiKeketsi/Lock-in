@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Quote, Sparkles, Trophy, Flame, Lock } from "lucide-react";
+import { Quote, Sparkles, Trophy, Flame, Lock, ArrowRight, Clock, Users, HeartHandshake } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
 import { TaskBoard } from "@/components/TaskBoard";
 import { VirtualPet } from "@/components/VirtualPet";
@@ -8,10 +8,10 @@ import { useLockIn } from "@/lib/store";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Lock-In · Focus app for students" },
-      { name: "description", content: "Lock-In helps students beat procrastination with task management, focus timer, social media lock, virtual pet and gamification." },
-      { property: "og:title", content: "Lock-In · Focus app for students" },
-      { property: "og:description", content: "Beat procrastination with focus sessions, a virtual pet companion and gamified streaks." },
+      { title: "Lock-In · The Top AI Study & Focus Platform" },
+      { name: "description", content: "Lock-In transforms your study workflow with Pomodoro timers, real-time peer focus rooms, an AI companion, and task management." },
+      { property: "og:title", content: "Lock-In · The Top AI Study & Focus Platform" },
+      { property: "og:description", content: "Beat procrastination with focus sessions, a virtual companion, and real-time study rooms." },
     ],
   }),
   component: Home,
@@ -21,7 +21,8 @@ const QUOTES = [
   "Discipline is choosing what you want most over what you want now.",
   "Small steps every day beat heroic effort once a week.",
   "Future you is watching. Make them proud.",
-  "Focus is a superpower. Train it.",
+  "Focus is a superpower. Train it daily.",
+  "The secret of getting ahead is getting started.",
 ];
 
 function Home() {
@@ -32,86 +33,158 @@ function Home() {
   ).length;
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-background">
       <AppNav />
 
-      <main className="mx-auto max-w-6xl px-4 py-8 space-y-8">
+      <main className="mx-auto max-w-6xl px-4 py-6 md:py-10 space-y-8">
+        {/* StudyFetch Style Account Notice */}
         {!state.user && (
-          <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-5 text-amber-900 dark:text-amber-200 flex flex-wrap items-center justify-between gap-4 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
-                <Lock className="size-6" />
+          <div className="rounded-3xl bg-[#fff5ec] dark:bg-[#391f0c] border border-[#ffaa6b]/60 dark:border-[#6a4225] p-5 text-[#4a1d00] dark:text-[#ffca98] flex flex-wrap items-center justify-between gap-4 shadow-sm transition-all">
+            <div className="flex items-center gap-3.5">
+              <div className="size-11 rounded-2xl bg-[#ffca98] dark:bg-[#6a4225] text-[#4a1d00] dark:text-[#ffca98] flex items-center justify-center shrink-0">
+                <Lock className="size-5" />
               </div>
               <div>
-                <div className="font-bold text-base">Account Required for Lock-In Activities</div>
-                <div className="text-xs opacity-90">
-                  Please log in or create an account to start tasks, track focus sessions, log check-ins, build streaks, and join focus rooms. No activity is stored without an account.
+                <div className="font-display font-bold text-base">Account Recommended for Live Sync</div>
+                <div className="text-xs text-[#4a1d00]/80 dark:text-[#ffca98]/80 leading-relaxed">
+                  Log in or create a free account to preserve your study streaks, earn XP, level up your pet, and save room sessions.
                 </div>
               </div>
             </div>
-            <div className="flex gap-2 text-xs font-semibold shrink-0">
-              <Link to="/login" className="px-4 py-2 rounded-xl focus-gradient text-primary-foreground shadow-soft hover:opacity-90">
+            <div className="flex items-center gap-2 shrink-0">
+              <Link
+                to="/login"
+                className="rounded-full px-4 py-2 text-xs font-semibold bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] hover:opacity-90 transition shadow-sm"
+              >
                 Log In
               </Link>
-              <Link to="/register" className="px-4 py-2 rounded-xl bg-secondary text-secondary-foreground hover:bg-secondary/80">
+              <Link
+                to="/register"
+                className="rounded-full px-4 py-2 text-xs font-semibold border border-[#ffaa6b] dark:border-[#6a4225] bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 transition"
+              >
                 Create Account
               </Link>
             </div>
           </div>
         )}
 
-        {/* Hero */}
-        <section className="relative overflow-hidden rounded-3xl focus-gradient p-8 md:p-12 text-primary-foreground">
-          <div className="absolute -right-20 -top-20 size-72 rounded-full bg-accent/30 blur-3xl" aria-hidden />
-          <div className="relative max-w-2xl">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-medium backdrop-blur">
-        
-            </span>
-            <h1 className="mt-4 font-display text-4xl md:text-5xl font-semibold tracking-tight">
-              Stop scrolling.<br />Start locking in.
+        {/* StudyFetch Signature Hero Section */}
+        <section className="relative overflow-hidden rounded-[32px] bg-card border border-border p-8 md:p-14 shadow-card">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-[#f5d5ff]/40 via-[#bbeef0]/30 to-transparent dark:from-[#311e36]/40 dark:via-[#002d30]/20 rounded-full blur-3xl pointer-events-none" aria-hidden />
+          <div className="absolute bottom-0 left-1/3 w-64 h-64 bg-gradient-to-tr from-[#f9f284]/30 to-transparent dark:from-[#2c2612]/30 rounded-full blur-2xl pointer-events-none" aria-hidden />
+
+          <div className="relative max-w-2xl space-y-4">
+            {/* Modality Chips */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="sfb-badge-lemon inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                <Sparkles className="size-3" /> Focus System
+              </span>
+              <span className="sfb-badge-lime inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                <Users className="size-3" /> P2P Study Rooms
+              </span>
+              <span className="sfb-badge-pink inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                <HeartHandshake className="size-3" /> AI Companion
+              </span>
+            </div>
+
+            {/* Headline with Editorial Serif Accent */}
+            <h1 className="font-display text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-foreground leading-[1.12]">
+              Stop scrolling.<br />
+              <span className="font-editorial italic font-normal text-muted-foreground">Start locking in.</span>
             </h1>
-            <p className="mt-3 text-base md:text-lg text-primary-foreground/80 max-w-lg">
-              Manage tasks, run focused Pomodoro sessions, raise your virtual pet and watch your streak grow, all in one calm space.
+
+            <p className="text-base md:text-lg text-muted-foreground max-w-xl leading-relaxed pt-1">
+              Lock-In is the all-in-one focus workspace. Break down assignments, sync timers in real-time study rooms with friends, and raise your focus companion with every minute studied.
             </p>
-            <div className="mt-6 flex flex-wrap gap-3">
-              <Link to="/focus" className="rounded-lg bg-accent text-accent-foreground px-5 py-2.5 font-medium shadow-soft hover:opacity-95 transition">
-                Start a focus session
+
+            {/* Pill CTAs */}
+            <div className="pt-3 flex flex-wrap items-center gap-3">
+              <Link
+                to="/focus"
+                className="sfb-btn-primary flex items-center gap-2 text-sm font-semibold"
+              >
+                <span>Start Focus Session</span>
+                <ArrowRight className="size-4" />
               </Link>
-              <Link to="/warmup" className="rounded-lg bg-white/10 backdrop-blur px-5 py-2.5 font-medium hover:bg-white/20 transition">
-                Brain warm-up
+              <Link
+                to="/rooms"
+                className="sfb-btn-secondary flex items-center gap-2 text-sm font-semibold"
+              >
+                <Users className="size-4" />
+                <span>Join Study Room</span>
+              </Link>
+              <Link
+                to="/warmup"
+                className="rounded-full px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+              >
+                Brain Warm-up
               </Link>
             </div>
           </div>
         </section>
 
-        {/* Stat row */}
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard icon={<Flame className="size-4" />} label="Day streak" value={state.streak} accent="bg-accent/15 text-accent-foreground" />
-          <StatCard icon={<Sparkles className="size-4" />} label="Points" value={state.points} accent="bg-primary/10 text-primary" />
-          <StatCard icon={<Trophy className="size-4" />} label="Badges" value={state.badges.length} accent="bg-success/15 text-success" />
-          <StatCard icon={<Lock className="size-4" />} label="Done today" value={completedToday} accent="bg-secondary text-secondary-foreground" />
+        {/* StudyFetch Bento Stat Row */}
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard
+            icon={<Flame className="size-4" />}
+            label="Day streak"
+            value={`${state.streak} days`}
+            badgeClass="sfb-badge-lemon"
+          />
+          <StatCard
+            icon={<Sparkles className="size-4" />}
+            label="Focus Points"
+            value={state.points}
+            badgeClass="sfb-badge-pink"
+          />
+          <StatCard
+            icon={<Trophy className="size-4" />}
+            label="Badges Earned"
+            value={state.badges.length}
+            badgeClass="sfb-badge-lime"
+          />
+          <StatCard
+            icon={<Clock className="size-4" />}
+            label="Tasks Done Today"
+            value={completedToday}
+            badgeClass="sfb-badge-teal"
+          />
         </section>
 
-        <section className="grid lg:grid-cols-3 gap-6">
+        {/* Main Content Bento Grid */}
+        <section className="grid lg:grid-cols-3 gap-8">
+          {/* Left Column: TaskBoard & Daily Nudge */}
           <div className="lg:col-span-2 space-y-6">
             <TaskBoard />
 
-            <div className="card-surface p-5 flex items-start gap-4">
-              <div className="size-10 rounded-lg warm-gradient grid place-items-center text-accent-foreground shrink-0">
+            {/* StudyFetch Editorial Quote Card */}
+            <div className="sfb-card p-6 flex items-start gap-4">
+              <div className="size-11 rounded-2xl sfb-badge-peach flex items-center justify-center shrink-0">
                 <Quote className="size-5" />
               </div>
-              <div>
-                <p className="text-xs uppercase tracking-wider text-muted-foreground">Daily nudge</p>
-                <p className="mt-1 font-display text-lg leading-snug">"{quote}"</p>
+              <div className="space-y-1">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Daily Spark
+                </div>
+                <div className="font-editorial italic text-xl md:text-2xl text-foreground leading-snug">
+                  "{quote}"
+                </div>
               </div>
             </div>
 
+            {/* Badges Collection */}
             {state.badges.length > 0 && (
-              <div className="card-surface p-5">
-                <h3 className="font-display text-lg font-semibold mb-3">Badges</h3>
+              <div className="sfb-card p-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display text-base font-bold text-foreground">Your Achievements</h3>
+                  <span className="text-xs font-semibold text-muted-foreground">{state.badges.length} unlocked</span>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {state.badges.map((b) => (
-                    <span key={b} className="inline-flex items-center gap-1.5 rounded-full warm-gradient px-3 py-1 text-sm text-accent-foreground">
+                    <span
+                      key={b}
+                      className="sfb-badge-lime inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold"
+                    >
                       <Trophy className="size-3.5" /> {b}
                     </span>
                   ))}
@@ -120,10 +193,53 @@ function Home() {
             )}
           </div>
 
+          {/* Right Column: VirtualPet & Live Study Room Callout */}
           <div className="space-y-6">
             <VirtualPet />
 
-           
+            {/* StudyFetch Live Rooms Card */}
+            <div className="sfb-card p-6 space-y-4 relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <span className="sfb-badge-teal text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider inline-flex items-center gap-1">
+                  <Users className="size-3" /> Live Mesh
+                </span>
+                <span className="flex items-center gap-1 text-[11px] font-semibold text-[#16a34a]">
+                  <span className="size-2 rounded-full bg-[#22c55e] animate-pulse" />
+                  Instant WebRTC
+                </span>
+              </div>
+
+              <div>
+                <h3 className="font-display text-lg font-bold text-foreground">Study Together Live</h3>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Create a focus room, share the invite code with a friend, and study with live video, mic, chat, and concurrent timers.
+                </p>
+              </div>
+
+              <div className="pt-1">
+                <Link
+                  to="/rooms"
+                  className="w-full sfb-btn-primary flex items-center justify-center gap-2 text-xs font-semibold"
+                >
+                  <span>Explore Focus Rooms</span>
+                  <ArrowRight className="size-3.5" />
+                </Link>
+              </div>
+            </div>
+
+            {/* Mindful Check-in Prompt */}
+            <div className="sfb-card p-6 flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <div className="text-xs font-bold text-foreground">Daily Reflection</div>
+                <div className="text-xs text-muted-foreground">Log your mood & focus energy</div>
+              </div>
+              <Link
+                to="/checkin"
+                className="sfb-btn-secondary text-xs px-3.5 py-1.5 shrink-0"
+              >
+                Reflect
+              </Link>
+            </div>
           </div>
         </section>
       </main>
@@ -131,13 +247,26 @@ function Home() {
   );
 }
 
-function StatCard({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: number; accent: string }) {
+function StatCard({
+  icon,
+  label,
+  value,
+  badgeClass,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+  badgeClass: string;
+}) {
   return (
-    <div className="card-surface p-4">
-      <div className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium ${accent}`}>
-        {icon} {label}
+    <div className="sfb-card p-5 space-y-3">
+      <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${badgeClass}`}>
+        {icon}
+        <span>{label}</span>
       </div>
-      <div className="mt-2 font-display text-3xl font-semibold tabular-nums">{value}</div>
+      <div className="font-display text-3xl font-bold tracking-tight text-foreground tabular-nums">
+        {value}
+      </div>
     </div>
   );
 }

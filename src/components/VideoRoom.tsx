@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from "react";
-import { Mic, MicOff, Video, VideoOff, AlertCircle, RefreshCw } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, AlertCircle, RefreshCw, UserPlus } from "lucide-react";
 
 interface VideoRoomProps {
   roomId?: string;
@@ -42,7 +42,7 @@ function LocalVideo({
   const showVideo = cameraOn && !!stream;
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-black/80">
+    <div className="relative w-full h-full flex items-center justify-center bg-[#191919]">
       <video
         ref={videoRef}
         autoPlay
@@ -51,9 +51,9 @@ function LocalVideo({
         className={`w-full h-full object-cover ${showVideo ? "block" : "hidden"}`}
       />
       {!showVideo && (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-muted">
-          <div className="text-6xl animate-pulse">{emoji}</div>
-          <div className="mt-2 text-sm font-medium text-muted-foreground">{name} (you)</div>
+        <div className="w-full h-full flex flex-col items-center justify-center bg-[#eceae0] dark:bg-[#242220] transition-colors">
+          <div className="text-5xl md:text-6xl select-none transform transition-transform hover:scale-110">{emoji}</div>
+          <div className="mt-2 text-xs font-bold text-foreground">{name} (you)</div>
         </div>
       )}
     </div>
@@ -74,7 +74,6 @@ function RemoteVideo({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Dedicated audio element ensures microphone audio plays continuously even if video is hidden
   useEffect(() => {
     if (audioRef.current && stream) {
       if (audioRef.current.srcObject !== stream) {
@@ -96,7 +95,7 @@ function RemoteVideo({
   const showVideo = cameraOn && !!stream;
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-black/80">
+    <div className="relative w-full h-full flex items-center justify-center bg-[#191919]">
       <audio ref={audioRef} autoPlay playsInline />
       <video
         ref={videoRef}
@@ -106,9 +105,9 @@ function RemoteVideo({
         className={`w-full h-full object-cover ${showVideo ? "block" : "hidden"}`}
       />
       {!showVideo && (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-muted">
-          <div className="text-6xl">{emoji}</div>
-          <div className="mt-2 text-sm font-medium text-muted-foreground">{name}</div>
+        <div className="w-full h-full flex flex-col items-center justify-center bg-[#eceae0] dark:bg-[#242220] transition-colors">
+          <div className="text-5xl md:text-6xl select-none">{emoji}</div>
+          <div className="mt-2 text-xs font-bold text-foreground">{name}</div>
         </div>
       )}
     </div>
@@ -123,79 +122,74 @@ export function VideoRoom({
   onToggleMic,
 }: VideoRoomProps) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const [mediaError, setMediaError] = useState<string | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [mediaError, setMediaError] = useState<string | null>(null);
 
   const currentUser = members.find((m) => m.id === currentUserId);
-  const safeMembers = members.map((m) => ({
-    ...m,
-    cameraOn: m.cameraOn ?? false,
-    micOn: m.micOn ?? false,
-  }));
+  const safeMembers = members.length > 0 ? members : currentUser ? [currentUser] : [];
 
   const startCamera = useCallback(async () => {
-    setMediaError(null);
     try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-      } catch {
+      setMediaError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      setLocalStream(stream);
+
+      if (trysteroRoom) {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-            },
-          });
-        } catch {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          trysteroRoom.addStream(stream);
+        } catch (e) {
+          console.warn("Trystero addStream error:", e);
         }
       }
-
-      localStreamRef.current = stream;
-      setLocalStream(stream);
     } catch (err: any) {
-      console.error("Error accessing camera/mic:", err);
-      setMediaError(
-        err.name === "NotAllowedError" || err.name === "PermissionDeniedError"
-          ? "Microphone/Camera permission denied. Please click the lock icon in your browser URL bar and allow Microphone & Camera access."
-          : "Could not detect an active camera or microphone on this device."
-      );
+      console.warn("Camera/mic error:", err);
+      // Fallback: Try audio only
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setLocalStream(audioStream);
+        if (trysteroRoom) {
+          try {
+            trysteroRoom.addStream(audioStream);
+          } catch {}
+        }
+      } catch (err2: any) {
+        setMediaError(
+          err.name === "NotAllowedError" || err2.name === "NotAllowedError"
+            ? "Microphone/Camera permission denied. Enable browser media permissions to talk."
+            : "No camera or microphone hardware found."
+        );
+      }
     }
-  }, []);
+  }, [trysteroRoom]);
 
   useEffect(() => {
     startCamera();
-
     return () => {
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => track.stop());
-        localStreamRef.current = null;
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [startCamera]);
+  }, []);
 
-  // Update track enabled states whenever mic or camera toggles
   useEffect(() => {
-    if (localStream && currentUser) {
+    if (localStream) {
       localStream.getVideoTracks().forEach((track) => {
-        track.enabled = currentUser.cameraOn ?? false;
-      });
-      localStream.getAudioTracks().forEach((track) => {
-        track.enabled = currentUser.micOn ?? false;
+        track.enabled = currentUser?.cameraOn ?? false;
       });
     }
-  }, [localStream, currentUser?.cameraOn, currentUser?.micOn]);
+  }, [currentUser?.cameraOn, localStream]);
 
-  // Connect local and remote media streams via Trystero P2P WebRTC
+  useEffect(() => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = currentUser?.micOn ?? true;
+      });
+    }
+  }, [currentUser?.micOn, localStream]);
+
   useEffect(() => {
     if (!trysteroRoom || !localStream) return;
 
@@ -225,21 +219,21 @@ export function VideoRoom({
     <div className="space-y-4">
       {/* Permission / Hardware error warning banner */}
       {mediaError && (
-        <div className="rounded-xl bg-destructive/15 border border-destructive/30 p-3 text-sm text-destructive flex items-center justify-between gap-3">
+        <div className="rounded-2xl bg-[#fee2e2] dark:bg-[#450a0a] border border-[#ef4444]/40 p-3.5 text-xs text-[#991b1b] dark:text-[#fecaca] flex items-center justify-between gap-3 shadow-sm">
           <div className="flex items-center gap-2">
-            <AlertCircle className="size-5 shrink-0" />
+            <AlertCircle className="size-4 shrink-0 text-[#ef4444]" />
             <span>{mediaError}</span>
           </div>
           <button
             onClick={startCamera}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 text-xs font-medium shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#ef4444] text-white hover:opacity-90 text-[11px] font-bold shrink-0"
           >
-            <RefreshCw className="size-3.5" /> Retry Access
+            <RefreshCw className="size-3" /> Retry Media
           </button>
         </div>
       )}
 
-      {/* Video Grid */}
+      {/* Video Grid with StudyFetch Bento Styling */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {safeMembers.map((member) => {
           const isMe = member.id === currentUserId;
@@ -250,7 +244,7 @@ export function VideoRoom({
           return (
             <div
               key={member.id}
-              className="relative rounded-2xl overflow-hidden bg-card border border-border aspect-video shadow-sm"
+              className="relative rounded-3xl overflow-hidden bg-card border border-border aspect-video shadow-card group transition-all duration-300"
             >
               {isMe ? (
                 <LocalVideo
@@ -268,21 +262,21 @@ export function VideoRoom({
                 />
               )}
 
-              {/* Status Overlay */}
+              {/* Status Floating Pill Overlays */}
               <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end pointer-events-none">
-                <div className="flex gap-1.5 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg text-white">
+                <div className="flex items-center gap-1.5 bg-[#191919]/75 dark:bg-[#faf9f5]/85 backdrop-blur-md px-2.5 py-1 rounded-full text-white dark:text-[#191919] shadow-sm">
                   {member.micOn ? (
-                    <Mic className="size-4 text-emerald-400" />
+                    <Mic className="size-3.5 text-[#22c55e]" />
                   ) : (
-                    <MicOff className="size-4 text-rose-400" />
+                    <MicOff className="size-3.5 text-[#ef4444]" />
                   )}
                   {member.cameraOn ? (
-                    <Video className="size-4 text-emerald-400" />
+                    <Video className="size-3.5 text-[#22c55e]" />
                   ) : (
-                    <VideoOff className="size-4 text-rose-400" />
+                    <VideoOff className="size-3.5 text-[#ef4444]" />
                   )}
                 </div>
-                <div className="bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-medium text-white">
+                <div className="bg-[#191919]/75 dark:bg-[#faf9f5]/85 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-bold text-white dark:text-[#191919] shadow-sm">
                   {member.name}
                   {isMe && " (you)"}
                 </div>
@@ -296,37 +290,39 @@ export function VideoRoom({
           Array.from({ length: 3 - safeMembers.length }).map((_, i) => (
             <div
               key={`empty-${i}`}
-              className="rounded-2xl bg-muted/40 border border-dashed border-border aspect-video flex flex-col items-center justify-center text-muted-foreground/60 text-xs"
+              className="rounded-3xl bg-secondary/30 border border-dashed border-border aspect-video flex flex-col items-center justify-center text-muted-foreground/70 p-4 text-center space-y-1.5 transition-colors"
             >
-              <span>Waiting for friend to join…</span>
+              <UserPlus className="size-5 text-muted-foreground/60" />
+              <span className="text-xs font-semibold text-foreground">Waiting for peer…</span>
+              <span className="text-[10px] text-muted-foreground">Share the invite link to study together</span>
             </div>
           ))}
       </div>
 
-      {/* Controls */}
+      {/* Media Controls Styled as StudyFetch Pills */}
       <div className="flex justify-center items-center gap-3 pt-2">
         <button
           onClick={onToggleMic}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-medium transition-all shadow-sm ${
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold transition-all shadow-sm ${
             isMyMicOn
-              ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-              : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+              ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] hover:opacity-90"
+              : "bg-[#fee2e2] text-[#991b1b] border border-[#ef4444]/30 hover:bg-[#fecaca]"
           }`}
         >
-          {isMyMicOn ? <Mic className="size-5" /> : <MicOff className="size-5" />}
-          <span className="text-sm">{isMyMicOn ? "Mic Live" : "Mic Muted"}</span>
+          {isMyMicOn ? <Mic className="size-4 text-[#22c55e]" /> : <MicOff className="size-4" />}
+          <span>{isMyMicOn ? "Mic Live" : "Mic Muted"}</span>
         </button>
 
         <button
           onClick={onToggleCamera}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-medium transition-all shadow-sm ${
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold transition-all shadow-sm ${
             isMyCameraOn
-              ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-              : "bg-secondary hover:bg-secondary/80 text-foreground"
+              ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] hover:opacity-90"
+              : "bg-secondary text-muted-foreground hover:text-foreground border border-border"
           }`}
         >
-          {isMyCameraOn ? <Video className="size-5" /> : <VideoOff className="size-5" />}
-          <span className="text-sm">{isMyCameraOn ? "Camera On" : "Camera Off"}</span>
+          {isMyCameraOn ? <Video className="size-4 text-[#22c55e]" /> : <VideoOff className="size-4" />}
+          <span>{isMyCameraOn ? "Camera Live" : "Camera Off"}</span>
         </button>
       </div>
     </div>

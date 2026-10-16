@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Pause, Play, Square, ShieldAlert, Download, Globe, Lock } from "lucide-react";
+import { Pause, Play, Square, ShieldAlert, Download, Globe, Lock, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
 import { useLockIn } from "@/lib/store";
 
@@ -11,17 +11,17 @@ export const Route = createFileRoute("/focus")({
   }),
   head: () => ({
     meta: [
-      { title: "Focus session · Lock-In" },
-      { name: "description", content: "Run a Pomodoro focus session with a social media lock to finish your task." },
+      { title: "Focus Session · Lock-In" },
+      { name: "description", content: "Run a Pomodoro focus session with social media distraction locks to achieve deep work." },
     ],
   }),
   component: FocusPage,
 });
 
-const BLOCKED = ["instagram.com", "tiktok.com", "x.com", "twitter.com", "facebook.com", "youtube.com"];
+const BLOCKED = ["instagram.com", "tiktok.com", "x.com", "twitter.com", "facebook.com", "youtube.com", "reddit.com"];
 
 function FocusPage() {
-  const { taskId, blocked } = Route.useSearch();
+  const { taskId } = Route.useSearch();
   const { state, addSession, completeTask } = useLockIn();
   const task = state.tasks.find((t) => t.id === taskId);
 
@@ -55,31 +55,34 @@ function FocusPage() {
       <div className="min-h-screen bg-background flex flex-col">
         <AppNav />
         <main className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-card border border-border rounded-2xl p-8 shadow-soft text-center space-y-6">
-            <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+          <div className="w-full max-w-md sfb-card p-8 md:p-10 text-center space-y-6">
+            <div className="mx-auto size-16 rounded-3xl sfb-badge-lemon flex items-center justify-center text-foreground">
               <Lock className="size-8" />
             </div>
             <div className="space-y-2">
+              <span className="sfb-badge-pink text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                Authentication Required
+              </span>
               <h1 className="text-2xl font-bold font-display text-foreground">
-                Account Required for Focus Sessions
+                Sign In to Start Focus
               </h1>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                Log in or create an account to start focus timers, log session history, earn points, and level up your virtual pet.
+              <p className="text-muted-foreground text-xs leading-relaxed max-w-xs mx-auto">
+                Log in to link focus sessions with your study tasks, track your weekly metrics, and earn XP for your study companion.
               </p>
             </div>
 
-            <div className="space-y-3 pt-2">
+            <div className="space-y-2.5 pt-2">
               <Link
                 to="/login"
-                className="w-full inline-flex items-center justify-center py-3 rounded-xl focus-gradient text-primary-foreground font-semibold shadow-soft hover:opacity-90 transition"
+                className="w-full sfb-btn-primary inline-flex items-center justify-center py-3 text-xs font-semibold"
               >
-                Log In
+                Log In to Lock-In
               </Link>
               <Link
                 to="/register"
-                className="w-full inline-flex items-center justify-center py-3 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-secondary/80 transition"
+                className="w-full sfb-btn-secondary inline-flex items-center justify-center py-3 text-xs font-semibold"
               >
-                Create an Account
+                Create Free Account
               </Link>
             </div>
           </div>
@@ -123,157 +126,194 @@ function FocusPage() {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-background">
       <AppNav />
-      <main className="mx-auto max-w-3xl px-4 py-10">
-        <div className="text-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground">
-            <ShieldAlert className="size-3" /> Social media lock active
-          </span>
-          <h1 className="mt-3 font-display text-3xl md:text-4xl font-semibold">
-            {task ? task.title : "Free focus session"}
+      <main className="mx-auto max-w-3xl px-4 py-8 md:py-12 space-y-8">
+        {/* Header */}
+        <div className="text-center space-y-3">
+          <div className="inline-flex items-center gap-2">
+            <span className="sfb-badge-lime text-[11px] font-bold px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1.5">
+              <ShieldAlert className="size-3" /> Focus Mode Active
+            </span>
+            {task && (
+              <span className="sfb-badge-lemon text-[11px] font-bold px-3 py-1 rounded-full">
+                {task.category}
+              </span>
+            )}
+          </div>
+
+          <h1 className="font-display text-3xl md:text-4xl font-bold tracking-tight text-foreground">
+            {task ? task.title : "Deep Work Focus Session"}
           </h1>
-          <p className="mt-2 text-muted-foreground">
-            {task ? `${task.category} · ${task.priority} priority` : "Pick a task from your list to track it automatically."}
+          <p className="text-xs md:text-sm text-muted-foreground max-w-md mx-auto">
+            {task ? `Priority: ${task.priority.toUpperCase()} · Stay locked in until the timer chimes.` : "Set your target duration, eliminate browser tabs, and lock in."}
           </p>
         </div>
 
-        {/* Timer ring */}
-        <div className="mt-10 grid place-items-center">
-          <div className={`relative size-72 rounded-full grid place-items-center focus-gradient text-primary-foreground ${running ? "pulse-ring" : ""}`}>
-            <svg className="absolute inset-0 -rotate-90" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="46" stroke="rgba(255,255,255,0.15)" strokeWidth="3" fill="none" />
-              <circle
-                cx="50" cy="50" r="46"
-                stroke="oklch(0.85 0.13 70)"
-                strokeWidth="3"
-                strokeDasharray={2 * Math.PI * 46}
-                strokeDashoffset={(1 - progress) * 2 * Math.PI * 46}
-                strokeLinecap="round"
-                fill="none"
-                style={{ transition: "stroke-dashoffset 1s linear" }}
-              />
-            </svg>
-            <div className="text-center">
-              <div className="font-display text-6xl font-semibold tabular-nums">{min}:{sec}</div>
-              <div className="mt-1 text-xs uppercase tracking-widest opacity-80">{running ? "Locked in" : done ? "Done" : "Ready"}</div>
+        {/* StudyFetch Minimalist Circular Timer Card */}
+        <div className="sfb-card p-8 md:p-12 text-center space-y-8">
+          <div className="grid place-items-center">
+            <div className="relative size-68 md:size-80 rounded-full grid place-items-center bg-[#f7f6ef] dark:bg-[#191919] border border-border shadow-inner">
+              <svg className="absolute inset-0 -rotate-90 size-full p-2" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="2.5" className="text-border" fill="none" />
+                <circle
+                  cx="50" cy="50" r="45"
+                  stroke="#bcf887"
+                  strokeWidth="3.5"
+                  strokeDasharray={2 * Math.PI * 45}
+                  strokeDashoffset={(1 - progress) * 2 * Math.PI * 45}
+                  strokeLinecap="round"
+                  fill="none"
+                  className="transition-all duration-1000 ease-linear dark:stroke-[#6aba00]"
+                />
+              </svg>
+              <div className="text-center space-y-1">
+                <div className="font-display text-6xl md:text-7xl font-bold tracking-tight text-foreground tabular-nums">
+                  {min}:{sec}
+                </div>
+                <div className="text-[11px] font-extrabold uppercase tracking-widest text-muted-foreground">
+                  {running ? (
+                    <span className="text-[#16a34a] inline-flex items-center gap-1">
+                      <span className="size-2 rounded-full bg-[#22c55e] animate-pulse" />
+                      Locked In
+                    </span>
+                  ) : done ? (
+                    "Session Finished"
+                  ) : (
+                    "Ready to Focus"
+                  )}
+                </div>
+              </div>
             </div>
           </div>
+
+          {!done && (
+            <div className="space-y-5">
+              {/* Duration Pills */}
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {[15, 25, 45, 60].map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => { setDuration(m); setRunning(false); }}
+                    className={`rounded-full px-4 py-1.5 text-xs font-bold transition-all ${
+                      duration === m
+                        ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] shadow-sm scale-105"
+                        : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
+                    }`}
+                  >
+                    {m} min
+                  </button>
+                ))}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  onClick={() => setRunning((r) => !r)}
+                  className="sfb-btn-primary inline-flex items-center gap-2 text-sm font-bold px-8 py-3"
+                >
+                  {running ? <><Pause className="size-4" /> Pause Session</> : <><Play className="size-4" /> Start Lock-In</>}
+                </button>
+                <button
+                  onClick={() => { setRunning(false); setRemaining(duration * 60); }}
+                  className="sfb-btn-secondary inline-flex items-center gap-1.5 text-sm font-semibold px-5 py-3"
+                >
+                  <Square className="size-3.5" /> Reset
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Session Complete Reflection Card */}
+          {done && (
+            <div className="sfb-card p-6 md:p-8 bg-[#f4ffeb] dark:bg-[#1e2b0f] border border-[#ace37d]/50 dark:border-[#40552a] text-left space-y-4">
+              <div className="flex items-center gap-2 text-[#1c2e00] dark:text-[#bcf887]">
+                <CheckCircle2 className="size-5" />
+                <h2 className="font-display text-lg font-bold">Focus Session Complete! 🎉</h2>
+              </div>
+              <p className="text-xs text-[#1c2e00]/80 dark:text-[#bcf887]/80">
+                You just locked in for {duration} minutes. Rate your session to earn bonus companion XP.
+              </p>
+
+              <div className="grid sm:grid-cols-2 gap-4 pt-1">
+                <Rating label="Productivity Score" value={rating} onChange={setRating} />
+                <Rating label="Session Difficulty" value={difficulty} onChange={setDifficulty} />
+              </div>
+
+              <textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="What did you get done? Any takeaways?"
+                className="w-full min-h-[70px] rounded-2xl border border-border bg-card p-3 text-xs outline-none focus:ring-1 focus:ring-foreground"
+              />
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  onClick={() => finishSession(false)}
+                  className="sfb-btn-secondary text-xs py-2 px-4"
+                >
+                  Skip Feedback
+                </button>
+                <button
+                  onClick={() => finishSession(true)}
+                  className="sfb-btn-primary text-xs py-2 px-5 font-bold"
+                >
+                  Submit & Log Session
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {!done && (
-          <>
-            <div className="mt-6 flex justify-center gap-2">
-              {[15, 25, 45, 60].map((m) => (
-                <button
-                  key={m}
-                  onClick={() => { setDuration(m); setRunning(false); }}
-                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                    duration === m ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/70"
-                  }`}
-                >
-                  {m}m
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-4 flex justify-center gap-3">
-              <button
-                onClick={() => setRunning((r) => !r)}
-                className="inline-flex items-center gap-2 rounded-lg bg-foreground text-background px-5 py-2.5 font-medium hover:opacity-90"
-              >
-                {running ? <><Pause className="size-4" /> Pause</> : <><Play className="size-4" /> Start</>}
-              </button>
-              <button
-                onClick={() => { setRunning(false); setRemaining(duration * 60); }}
-                className="inline-flex items-center gap-2 rounded-lg bg-secondary text-secondary-foreground px-4 py-2.5 hover:bg-secondary/70"
-              >
-                <Square className="size-4" /> Reset
-              </button>
-            </div>
-          </>
-        )}
-
-        {done && (
-          <div className="mt-8 card-surface p-6">
-            <h2 className="font-display text-xl font-semibold">Session complete 🎉</h2>
-            <p className="text-sm text-muted-foreground">Rate this session — feedback shapes your weekly reports.</p>
-
-            <div className="mt-5 grid sm:grid-cols-2 gap-4">
-              <Rating label="Productivity" value={rating} onChange={setRating} />
-              <Rating label="Difficulty" value={difficulty} onChange={setDifficulty} />
-            </div>
-
-            <textarea
-              value={feedback}
-              onChange={(e) => setFeedback(e.target.value)}
-              placeholder="What could improve next time?"
-              className="mt-4 w-full min-h-[80px] rounded-lg border border-input bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
-
-            <div className="mt-4 flex flex-wrap gap-2 justify-end">
-              <button
-                onClick={() => finishSession(false)}
-                className="rounded-lg bg-secondary text-secondary-foreground px-4 py-2 text-sm"
-              >
-                Skip feedback
-              </button>
-              <button
-                onClick={() => finishSession(true)}
-                className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium"
-              >
-                Submit & finish
-              </button>
-            </div>
+        {/* Blocked URLs Card */}
+        <div className="sfb-card p-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-display text-sm font-bold text-foreground flex items-center gap-2">
+              <ShieldAlert className="size-4 text-[#f98538]" /> Protected Distraction Shield
+            </h3>
+            <span className="sfb-badge-lemon text-[10px] font-bold px-2 py-0.5 rounded-full">
+              {BLOCKED.length} Apps
+            </span>
           </div>
-        )}
-
-        {blocked && (
-          <div className="mt-6 rounded-lg border border-destructive/30 bg-destructive/10 text-destructive p-4 text-sm">
-            <strong>{blocked}</strong> was blocked by the Lock-In extension. Stay focused — you got this.
-          </div>
-        )}
-
-        <div className="mt-10 card-surface p-5">
-          <h3 className="font-display text-lg font-semibold flex items-center gap-2">
-            <ShieldAlert className="size-4 text-primary" /> Blocked during this session
-          </h3>
-          <div className="mt-3 flex flex-wrap gap-2">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            While locking in, these common dopamine traps should be closed to maintain flow state:
+          </p>
+          <div className="flex flex-wrap gap-1.5 pt-1">
             {BLOCKED.map((b) => (
-              <span key={b} className="rounded-md bg-destructive/10 text-destructive border border-destructive/20 px-2 py-1 text-xs font-mono">
+              <span
+                key={b}
+                className="rounded-full bg-secondary border border-border px-3 py-1 text-[11px] font-medium text-foreground"
+              >
                 {b}
               </span>
             ))}
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">
-            This in-app banner is visual only. Install the Lock-In Chrome extension below to actually redirect blocked sites back here.
-          </p>
         </div>
 
-        <div className="mt-6 card-surface p-5">
-          <h3 className="font-display text-lg font-semibold flex items-center gap-2">
-            <Globe className="size-4 text-primary" /> Lock-In Browser extension
-          </h3>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Enforces the lock by redirecting Instagram, TikTok, X, YouTube, Reddit and more back to Lock-In while a session is running.
-          </p>
+        {/* Browser Extension Download Card */}
+        <div className="sfb-card p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div className="space-y-1.5 max-w-lg">
+            <div className="flex items-center gap-2">
+              <Globe className="size-4 text-foreground" />
+              <h3 className="font-display text-base font-bold text-foreground">Lock-In Chrome Extension</h3>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Enforces hard locks on browser distractions by automatically redirecting YouTube, TikTok, and Instagram back to your focus session.
+            </p>
+          </div>
           <button
             onClick={downloadExtension}
-            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:opacity-90"
+            className="sfb-btn-primary shrink-0 flex items-center gap-2 text-xs py-2.5 px-5"
           >
-            <Download className="size-4" /> Download extension (.zip)
+            <Download className="size-3.5" />
+            <span>Download .zip</span>
           </button>
-          <ol className="mt-4 text-xs text-muted-foreground list-decimal list-inside space-y-1">
-            <li>Unzip the downloaded file.</li>
-            <li>Open <span className="font-mono">chrome://extensions</span> in Chrome / Edge / Brave.</li>
-            <li>Enable <strong>Developer mode</strong> (top-right toggle).</li>
-            <li>Click <strong>Load unpacked</strong> and select the unzipped folder.</li>
-            <li>Open the extension popup to start a lock-in session.</li>
-          </ol>
         </div>
 
-        <div className="mt-6 text-center">
-          <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">← Back to dashboard</Link>
+        <div className="text-center pt-2">
+          <Link to="/" className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="size-3.5" /> Back to Dashboard
+          </Link>
         </div>
       </main>
     </div>
@@ -282,15 +322,18 @@ function FocusPage() {
 
 function Rating({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
   return (
-    <div>
-      <div className="text-sm font-medium mb-2">{label}</div>
-      <div className="flex gap-1">
+    <div className="space-y-1.5">
+      <div className="text-xs font-bold text-foreground">{label}</div>
+      <div className="flex gap-1.5">
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={n}
+            type="button"
             onClick={() => onChange(n)}
-            className={`flex-1 h-10 rounded-md border text-sm font-medium transition ${
-              n <= value ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border text-muted-foreground hover:border-primary/40"
+            className={`flex-1 h-8 rounded-full border text-xs font-bold transition-all ${
+              n <= value
+                ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] border-transparent"
+                : "bg-card border-border text-muted-foreground hover:text-foreground"
             }`}
           >
             {n}
