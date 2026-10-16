@@ -43,8 +43,8 @@ export function AppNav() {
         </div>
       )}
 
-      {/* Standard Rectangular Navigation Bar */}
-      <header className="w-full border-b border-border bg-card/95 backdrop-blur-md">
+      {/* Standard Rectangular Navigation Bar (Semi-Transparent & Frosted) */}
+      <header className="w-full border-b border-border/50 bg-card/60 dark:bg-card/60 backdrop-blur-lg transition-colors shadow-xs">
         <div className="mx-auto max-w-6xl h-16 flex items-center justify-between px-4 sm:px-6">
           {/* Brand Logo */}
           <Link to="/" className="flex items-center gap-2.5 group shrink-0 whitespace-nowrap">
