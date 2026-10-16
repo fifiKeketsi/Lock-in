@@ -51,14 +51,9 @@ export function AppNav() {
             <div className="size-9 rounded-full bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] flex items-center justify-center font-bold text-sm shadow-sm group-hover:scale-105 transition-transform">
               <Lock className="size-4.5" />
             </div>
-            <div className="flex items-center gap-1.5 whitespace-nowrap">
-              <span className="font-display text-lg font-bold tracking-tight text-foreground whitespace-nowrap">
-                Lock-In
-              </span>
-              <span className="sfb-badge-lemon text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                AI
-              </span>
-            </div>
+            <span className="font-display text-lg font-bold tracking-tight text-foreground whitespace-nowrap">
+              Lock-In
+            </span>
           </Link>
 
           {/* Desktop Navigation */}

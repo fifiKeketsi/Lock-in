@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Quote, Sparkles, Trophy, Flame, ArrowRight, Clock, Users, HeartHandshake } from "lucide-react";
+import { Quote, Sparkles, Trophy, Flame, ArrowRight, Clock, Users } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
 import { TaskBoard } from "@/components/TaskBoard";
 import { VirtualPet } from "@/components/VirtualPet";
@@ -40,19 +40,6 @@ function Home() {
         {/* StudyFetch Signature Hero Section */}
         <section className="relative py-4 md:py-8">
           <div className="relative max-w-3xl space-y-5">
-            {/* Modality Chips */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="sfb-badge-lemon inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                <Sparkles className="size-3" /> Focus System
-              </span>
-              <span className="sfb-badge-lime inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                <Users className="size-3" /> P2P Study Rooms
-              </span>
-              <span className="sfb-badge-pink inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                <HeartHandshake className="size-3" /> AI Companion
-              </span>
-            </div>
-
             {/* Headline with Editorial Serif Accent */}
             <h1 className="font-display text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-foreground leading-[1.12]">
               Stop scrolling.<br />
