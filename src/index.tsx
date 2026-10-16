@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Quote, Sparkles, Trophy, Flame, Lock, ArrowRight, Clock, Users, HeartHandshake } from "lucide-react";
+import { Quote, Sparkles, Trophy, Flame, ArrowRight, Clock, Users, HeartHandshake } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
 import { TaskBoard } from "@/components/TaskBoard";
 import { VirtualPet } from "@/components/VirtualPet";
@@ -37,37 +37,6 @@ function Home() {
       <AppNav />
 
       <main className="mx-auto max-w-6xl px-4 py-6 md:py-10 space-y-8">
-        {/* StudyFetch Style Account Notice */}
-        {!state.user && (
-          <div className="rounded-3xl bg-[#fff5ec] dark:bg-[#391f0c] border border-[#ffaa6b]/60 dark:border-[#6a4225] p-5 text-[#4a1d00] dark:text-[#ffca98] flex flex-wrap items-center justify-between gap-4 shadow-sm transition-all">
-            <div className="flex items-center gap-3.5">
-              <div className="size-11 rounded-2xl bg-[#ffca98] dark:bg-[#6a4225] text-[#4a1d00] dark:text-[#ffca98] flex items-center justify-center shrink-0">
-                <Lock className="size-5" />
-              </div>
-              <div>
-                <div className="font-display font-bold text-base">Account Recommended for Live Sync</div>
-                <div className="text-xs text-[#4a1d00]/80 dark:text-[#ffca98]/80 leading-relaxed">
-                  Log in or create a free account to preserve your study streaks, earn XP, level up your pet, and save room sessions.
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Link
-                to="/login"
-                className="rounded-full px-4 py-2 text-xs font-semibold bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] hover:opacity-90 transition shadow-sm"
-              >
-                Log In
-              </Link>
-              <Link
-                to="/register"
-                className="rounded-full px-4 py-2 text-xs font-semibold border border-[#ffaa6b] dark:border-[#6a4225] bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 transition"
-              >
-                Create Account
-              </Link>
-            </div>
-          </div>
-        )}
-
         {/* StudyFetch Signature Hero Section */}
         <section className="relative overflow-hidden rounded-[32px] bg-card border border-border p-8 md:p-14 shadow-card">
           <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-[#f5d5ff]/40 via-[#bbeef0]/30 to-transparent dark:from-[#311e36]/40 dark:via-[#002d30]/20 rounded-full blur-3xl pointer-events-none" aria-hidden />

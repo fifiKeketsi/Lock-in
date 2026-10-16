@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { AppNav } from "@/components/AppNav";
 import { createRoom, listRooms, deleteRoom, getMe, saveMe, type Room } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
-import { Users, Plus, Trash2, ArrowRight, Lock, Video } from "lucide-react";
+import { Users, Plus, Trash2, ArrowRight, Video } from "lucide-react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -47,7 +47,7 @@ function RoomsPage() {
 
   const onCreate = async () => {
     if (!state.user) {
-      alert("Please log in or register an account to create a room.");
+      navigate({ to: "/login" });
       return;
     }
     setCreating(true);
@@ -74,24 +74,6 @@ function RoomsPage() {
     <div className="min-h-screen bg-background">
       <AppNav />
       <main className="mx-auto max-w-4xl px-4 py-8 md:py-12 space-y-8">
-        {!state.user && (
-          <div className="rounded-3xl bg-[#fff5ec] dark:bg-[#391f0c] border border-[#ffaa6b]/50 p-4 text-[#4a1d00] dark:text-[#ffca98] flex flex-wrap items-center justify-between gap-4 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="size-10 rounded-2xl bg-[#ffca98] text-[#4a1d00] flex items-center justify-center shrink-0">
-                <Lock className="size-5" />
-              </div>
-              <div>
-                <div className="font-display font-bold text-sm">Account Required to Host Rooms</div>
-                <div className="text-xs text-[#4a1d00]/80 dark:text-[#ffca98]/80">Create an account to host persistent rooms and save your study history.</div>
-              </div>
-            </div>
-            <div className="flex gap-2 text-xs font-semibold">
-              <Link to="/login" className="px-4 py-1.5 rounded-full bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919]">Log In</Link>
-              <Link to="/register" className="px-4 py-1.5 rounded-full border border-[#ffaa6b] bg-white/50 dark:bg-black/20">Register</Link>
-            </div>
-          </div>
-        )}
-
         {/* Header */}
         <header className="space-y-3">
           <span className="sfb-badge-teal text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1.5">

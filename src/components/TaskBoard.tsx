@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
-import { Plus, Trash2, CheckCircle2, Circle, Clock, Calendar, Tag, Lock, CheckSquare, Sparkles } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { Plus, Trash2, CheckCircle2, Circle, Clock, Calendar, Tag, CheckSquare, Sparkles } from "lucide-react";
 import { useLockIn, formatDeadline, type Priority } from "@/lib/store";
 
 export function TaskBoard() {
   const { state, addTask, completeTask, deleteTask } = useLockIn();
+  const navigate = useNavigate();
   const [showAddForm, setShowAddForm] = useState(false);
   
   // Form State
@@ -19,7 +20,7 @@ export function TaskBoard() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!state.user) {
-      alert("Please log in or register an account to save tasks.");
+      navigate({ to: "/login" });
       return;
     }
     if (!title.trim()) return;
@@ -51,7 +52,7 @@ export function TaskBoard() {
         <button
           onClick={() => {
             if (!state.user) {
-              alert("Please log in or register an account to create tasks.");
+              navigate({ to: "/login" });
               return;
             }
             setShowAddForm(!showAddForm);
@@ -62,19 +63,6 @@ export function TaskBoard() {
           <span>New Task</span>
         </button>
       </div>
-
-      {!state.user && (
-        <div className="rounded-2xl bg-[#fff5ec] dark:bg-[#391f0c] border border-[#ffaa6b]/50 p-4 text-xs text-[#4a1d00] dark:text-[#ffca98] flex items-center justify-between gap-3 shadow-sm">
-          <div className="flex items-center gap-2">
-            <Lock className="size-4 shrink-0 text-[#f98538]" />
-            <span>Sign in to store assignments, link timers, and keep your tasks synced.</span>
-          </div>
-          <div className="flex gap-1.5 shrink-0 font-medium">
-            <Link to="/login" className="px-3 py-1 rounded-full bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919]">Log In</Link>
-            <Link to="/register" className="px-3 py-1 rounded-full border border-[#ffaa6b] bg-white/50 dark:bg-black/20">Register</Link>
-          </div>
-        </div>
-      )}
 
       {showAddForm && (
         <form onSubmit={handleSubmit} className="border border-border rounded-2xl p-5 bg-card/60 backdrop-blur space-y-4 shadow-sm">
