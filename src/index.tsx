@@ -38,11 +38,8 @@ function Home() {
 
       <main className="mx-auto max-w-6xl px-4 py-6 md:py-10 space-y-8">
         {/* StudyFetch Signature Hero Section */}
-        <section className="relative overflow-hidden rounded-[32px] bg-card border border-border p-8 md:p-14 shadow-card">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-[#f5d5ff]/40 via-[#bbeef0]/30 to-transparent dark:from-[#311e36]/40 dark:via-[#002d30]/20 rounded-full blur-3xl pointer-events-none" aria-hidden />
-          <div className="absolute bottom-0 left-1/3 w-64 h-64 bg-gradient-to-tr from-[#f9f284]/30 to-transparent dark:from-[#2c2612]/30 rounded-full blur-2xl pointer-events-none" aria-hidden />
-
-          <div className="relative max-w-2xl space-y-4">
+        <section className="relative py-4 md:py-8">
+          <div className="relative max-w-3xl space-y-5">
             {/* Modality Chips */}
             <div className="flex flex-wrap items-center gap-2">
               <span className="sfb-badge-lemon inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
