@@ -43,12 +43,12 @@ export function AppNav() {
         </div>
       )}
 
-      {/* StudyFetch Floating Pill Header */}
-      <header className="px-4 py-3">
-        <div className="sfb-nav-pill mx-auto max-w-6xl h-15 flex items-center justify-between px-3 md:px-5">
-          {/* Brand Logo & Modality Pill */}
+      {/* Standard Rectangular Navigation Bar */}
+      <header className="w-full border-b border-border bg-card/95 backdrop-blur-md">
+        <div className="mx-auto max-w-6xl h-16 flex items-center justify-between px-4 sm:px-6">
+          {/* Brand Logo */}
           <Link to="/" className="flex items-center gap-2.5 group shrink-0 whitespace-nowrap">
-            <div className="size-9 rounded-full bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] flex items-center justify-center font-bold text-sm shadow-sm group-hover:scale-105 transition-transform">
+            <div className="size-9 rounded-xl bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] flex items-center justify-center font-bold text-sm shadow-sm group-hover:scale-105 transition-transform">
               <Lock className="size-4.5" />
             </div>
             <span className="font-display text-lg font-bold tracking-tight text-foreground whitespace-nowrap">
@@ -71,7 +71,7 @@ export function AppNav() {
             {/* Theme Toggle Button */}
             <button
               onClick={cycleTheme}
-              className="size-8.5 rounded-full border border-border bg-card/60 hover:bg-secondary flex items-center justify-center text-foreground transition-all duration-200 hover:scale-105"
+              className="size-8.5 rounded-lg border border-border bg-card/60 hover:bg-secondary flex items-center justify-center text-foreground transition-all duration-200 hover:scale-105"
               aria-label="Toggle theme"
               title={`Current theme: ${state.theme}`}
             >
@@ -111,7 +111,7 @@ export function AppNav() {
                       await logout();
                       navigate({ to: "/" });
                     }}
-                    className="size-8 rounded-full hover:bg-destructive/10 hover:text-destructive flex items-center justify-center text-muted-foreground transition-colors"
+                    className="size-8 rounded-lg hover:bg-destructive/10 hover:text-destructive flex items-center justify-center text-muted-foreground transition-colors"
                     aria-label="Logout"
                     title="Log out"
                   >
@@ -120,16 +120,16 @@ export function AppNav() {
                 </div>
               </>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2">
                 <Link
                   to="/login"
-                  className="rounded-full px-3.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary transition-colors"
+                  className="rounded-lg px-3.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary transition-colors"
                 >
                   Log in
                 </Link>
                 <Link
                   to="/register"
-                  className="sfb-btn-primary text-xs py-1.5 px-4 font-semibold shadow-sm"
+                  className="sfb-btn-primary rounded-lg text-xs py-1.5 px-4 font-semibold shadow-sm"
                 >
                   Get Started
                 </Link>
@@ -139,9 +139,9 @@ export function AppNav() {
         </div>
       </header>
 
-      {/* Mobile Floating Bottom Bar */}
-      <div className="md:hidden fixed bottom-3 left-4 right-4 z-50">
-        <div className="sfb-nav-pill flex justify-around items-center py-2 px-2 shadow-lg">
+      {/* Mobile Bottom Bar */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card/95 backdrop-blur-md">
+        <div className="flex justify-around items-center py-2.5 px-2">
           <MobileNavLink to="/" icon={<LayoutDashboard className="size-4.5" />} label="Home" />
           <MobileNavLink to="/focus" icon={<Clock className="size-4.5" />} label="Focus" />
           <MobileNavLink to="/rooms" icon={<Users className="size-4.5" />} label="Rooms" />
@@ -170,7 +170,7 @@ function NavLink({
       to={to}
       activeProps={{ className: "bg-foreground text-background font-semibold shadow-sm" }}
       inactiveProps={{ className: "text-muted-foreground hover:text-foreground hover:bg-secondary/60" }}
-      className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition-all duration-150 relative"
+      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150 relative"
     >
       {icon}
       <span>{children}</span>
