@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Lock, BarChart3 } from "lucide-react";
+import { Lock } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
 import { useLockIn } from "@/lib/store";
 
@@ -15,47 +15,6 @@ export const Route = createFileRoute("/reports")({
 
 function ReportsPage() {
   const { state } = useLockIn();
-
-  if (!state.user) {
-    return (
-      <div className="min-h-screen bg-background flex flex-col">
-        <AppNav />
-        <main className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md sfb-card p-8 md:p-10 text-center space-y-6">
-            <div className="mx-auto size-16 rounded-3xl sfb-badge-teal flex items-center justify-center text-foreground">
-              <Lock className="size-8" />
-            </div>
-            <div className="space-y-2">
-              <span className="sfb-badge-lemon text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                Account Required
-              </span>
-              <h1 className="text-2xl font-bold font-display text-foreground">
-                Sign In to View Reports
-              </h1>
-              <p className="text-muted-foreground text-xs leading-relaxed max-w-xs mx-auto">
-                Log in or create an account to view your weekly focus stats, productivity analytics, and completion trends.
-              </p>
-            </div>
-
-            <div className="space-y-2.5 pt-2">
-              <Link
-                to="/login"
-                className="w-full sfb-btn-primary inline-flex items-center justify-center py-3 text-xs font-semibold"
-              >
-                Log In
-              </Link>
-              <Link
-                to="/register"
-                className="w-full sfb-btn-secondary inline-flex items-center justify-center py-3 text-xs font-semibold"
-              >
-                Create Account
-              </Link>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
 
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
@@ -80,7 +39,7 @@ function ReportsPage() {
   const totalDone = completedByDay.reduce((a, b) => a + b, 0);
   const avgRating = state.sessions.filter((s) => s.rating).length
     ? (state.sessions.filter((s) => s.rating).reduce((a, s) => a + (s.rating ?? 0), 0) /
-       state.sessions.filter((s) => s.rating).length).toFixed(1)
+      state.sessions.filter((s) => s.rating).length).toFixed(1)
     : "—";
 
   return (
@@ -88,14 +47,30 @@ function ReportsPage() {
       <AppNav />
       <main className="mx-auto max-w-5xl px-4 py-8 md:py-12 space-y-8">
         <div className="space-y-2">
-          <span className="sfb-badge-lime inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-            <BarChart3 className="size-3" /> Study Analytics
-          </span>
           <h1 className="font-display text-3xl md:text-4xl font-bold tracking-tight text-foreground">
             Your week in focus.<br />
             <span className="font-editorial italic font-normal text-muted-foreground">Productivity patterns from the last 7 days.</span>
           </h1>
         </div>
+
+        {!state.user && (
+          <div className="sfb-card p-5 bg-secondary/40 border border-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="font-display font-bold text-sm text-foreground flex items-center gap-2">
+                <Lock className="size-4" /> Personal Metrics Require an Account
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Log in or create a free account to track your focus hours, daily completion rates, and cognitive trends.
+              </p>
+            </div>
+            <Link
+              to="/login"
+              className="sfb-btn-primary text-xs py-2 px-5 font-bold shrink-0"
+            >
+              Log In to Lock-In
+            </Link>
+          </div>
+        )}
 
         {/* Bento Metric Cards */}
         <div className="grid sm:grid-cols-3 gap-4">

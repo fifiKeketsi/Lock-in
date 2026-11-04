@@ -8,9 +8,9 @@ import { useLockIn } from "@/lib/store";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Lock-In · The Top AI Study & Focus Platform" },
+      { title: "Lock-In · Study & Focus Platform" },
       { name: "description", content: "Lock-In transforms your study workflow with Pomodoro timers, real-time peer focus rooms, an AI companion, and task management." },
-      { property: "og:title", content: "Lock-In · The Top AI Study & Focus Platform" },
+      { property: "og:title", content: "Lock-In · Study & Focus Platform" },
       { property: "og:description", content: "Beat procrastination with focus sessions, a virtual companion, and real-time study rooms." },
     ],
   }),

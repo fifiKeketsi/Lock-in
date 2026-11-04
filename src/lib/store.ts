@@ -73,8 +73,16 @@ export interface LockInState {
 }
 
 const THEME_KEY = "lockin.theme.v1";
-const STATE_KEY = "lockin.state.v2";
 const USER_KEY = "lockin.user.v2";
+const LEGACY_STATE_KEY = "lockin.state.v2";
+
+function getUserStateKey(userId: string): string {
+  return `lockin.userdata.v3.uid.${userId}`;
+}
+
+function getUserEmailKey(email: string): string {
+  return `lockin.userdata.v3.email.${email.trim().toLowerCase()}`;
+}
 
 function getDefaultTheme(): Theme {
   if (typeof window === "undefined") return "system";
@@ -108,18 +116,120 @@ const defaultState: LockInState = {
   user: null,
 };
 
+function sanitizeLoadedState(data: any): Partial<LockInState> {
+  if (!data || typeof data !== "object") return {};
+  return {
+    tasks: Array.isArray(data.tasks) ? data.tasks : [],
+    moods: Array.isArray(data.moods) ? data.moods : [],
+    sessions: Array.isArray(data.sessions) ? data.sessions : [],
+    pet: data.pet
+      ? {
+          name: typeof data.pet.name === "string" ? data.pet.name : defaultState.pet.name,
+          happiness: typeof data.pet.happiness === "number" ? data.pet.happiness : defaultState.pet.happiness,
+          level: typeof data.pet.level === "number" ? data.pet.level : defaultState.pet.level,
+          xp: typeof data.pet.xp === "number" ? data.pet.xp : defaultState.pet.xp,
+        }
+      : defaultState.pet,
+    points: typeof data.points === "number" ? data.points : 0,
+    streak: typeof data.streak === "number" ? data.streak : 0,
+    lastActiveDay: typeof data.lastActiveDay === "string" ? data.lastActiveDay : undefined,
+    badges: Array.isArray(data.badges) ? data.badges : [],
+  };
+}
+
+function saveUserState(userId: string, email: string | undefined, data: Partial<LockInState>) {
+  if (typeof window === "undefined" || !userId) return;
+  try {
+    const payload = JSON.stringify({
+      tasks: data.tasks ?? [],
+      moods: data.moods ?? [],
+      sessions: data.sessions ?? [],
+      pet: data.pet ?? defaultState.pet,
+      points: data.points ?? 0,
+      streak: data.streak ?? 0,
+      lastActiveDay: data.lastActiveDay ?? null,
+      badges: data.badges ?? [],
+      savedAt: new Date().toISOString(),
+    });
+    localStorage.setItem(getUserStateKey(userId), payload);
+    if (email) {
+      localStorage.setItem(getUserEmailKey(email), payload);
+    }
+  } catch (err) {
+    console.warn("Error saving user state to localStorage:", err);
+  }
+}
+
+function loadUserState(userId: string, email?: string): Partial<LockInState> | null {
+  if (typeof window === "undefined" || !userId) return null;
+  try {
+    // 1. Try UID-based storage
+    const uidData = localStorage.getItem(getUserStateKey(userId));
+    if (uidData) {
+      const parsed = JSON.parse(uidData);
+      return sanitizeLoadedState(parsed);
+    }
+
+    // 2. Try Email-based storage
+    if (email) {
+      const emailData = localStorage.getItem(getUserEmailKey(email));
+      if (emailData) {
+        const parsed = JSON.parse(emailData);
+        // Link to UID key for fast future lookups
+        localStorage.setItem(getUserStateKey(userId), emailData);
+        return sanitizeLoadedState(parsed);
+      }
+    }
+
+    // 3. Fallback: check legacy storage
+    const legacy = localStorage.getItem(LEGACY_STATE_KEY);
+    if (legacy) {
+      const parsedLegacy = JSON.parse(legacy);
+      const hasContent =
+        (Array.isArray(parsedLegacy.tasks) && parsedLegacy.tasks.length > 0) ||
+        (Array.isArray(parsedLegacy.moods) && parsedLegacy.moods.length > 0) ||
+        (Array.isArray(parsedLegacy.sessions) && parsedLegacy.sessions.length > 0) ||
+        (typeof parsedLegacy.points === "number" && parsedLegacy.points > 0) ||
+        (typeof parsedLegacy.streak === "number" && parsedLegacy.streak > 0) ||
+        (Array.isArray(parsedLegacy.badges) && parsedLegacy.badges.length > 0);
+
+      if (hasContent) {
+        const sanitized = sanitizeLoadedState(parsedLegacy);
+        saveUserState(userId, email, sanitized);
+        return sanitized;
+      }
+    }
+  } catch (err) {
+    console.warn("Error reading user state from localStorage:", err);
+  }
+  return null;
+}
+
 function loadCachedState(): LockInState {
   if (typeof window === "undefined") return defaultState;
   try {
-    const savedState = localStorage.getItem(STATE_KEY);
-    const savedUser = localStorage.getItem(USER_KEY);
-    const parsedState = savedState ? JSON.parse(savedState) : {};
-    const parsedUser = savedUser ? JSON.parse(savedUser) : null;
+    const savedUserStr = localStorage.getItem(USER_KEY);
+    const parsedUser: User | null = savedUserStr ? JSON.parse(savedUserStr) : null;
+    if (parsedUser && parsedUser.id) {
+      const userSavedData = loadUserState(parsedUser.id, parsedUser.email);
+      if (userSavedData) {
+        return {
+          ...defaultState,
+          ...userSavedData,
+          theme: getDefaultTheme(),
+          user: parsedUser,
+        };
+      }
+      return {
+        ...defaultState,
+        theme: getDefaultTheme(),
+        user: parsedUser,
+      };
+    }
     return {
       ...defaultState,
-      ...parsedState,
       theme: getDefaultTheme(),
-      user: parsedUser,
+      user: null,
     };
   } catch {
     return defaultState;
@@ -133,21 +243,9 @@ const subscribers = new Set<() => void>();
 function notifySubscribers() {
   if (typeof window !== "undefined") {
     try {
-      localStorage.setItem(
-        STATE_KEY,
-        JSON.stringify({
-          tasks: memory.tasks,
-          moods: memory.moods,
-          sessions: memory.sessions,
-          pet: memory.pet,
-          points: memory.points,
-          streak: memory.streak,
-          lastActiveDay: memory.lastActiveDay,
-          badges: memory.badges,
-        })
-      );
       if (memory.user) {
         localStorage.setItem(USER_KEY, JSON.stringify(memory.user));
+        saveUserState(memory.user.id, memory.user.email, memory);
       } else {
         localStorage.removeItem(USER_KEY);
       }
@@ -169,26 +267,41 @@ function getSnapshot(): LockInState {
   return memory;
 }
 
+function sanitizeForFirestore(val: any): any {
+  if (val === undefined) return null;
+  if (val === null || typeof val !== "object") return val;
+  if (val instanceof Timestamp) return val;
+  if (Array.isArray(val)) {
+    return val.map((item) => sanitizeForFirestore(item));
+  }
+  const result: Record<string, any> = {};
+  for (const [k, v] of Object.entries(val)) {
+    if (v !== undefined) {
+      result[k] = sanitizeForFirestore(v);
+    }
+  }
+  return result;
+}
+
 async function saveStateToFirestore(userId: string) {
+  if (!userId) return;
   try {
     const docRef = doc(db, "users", userId);
+    const dataToSave = sanitizeForFirestore({
+      tasks: memory.tasks,
+      moods: memory.moods,
+      sessions: memory.sessions,
+      pet: memory.pet,
+      points: memory.points,
+      streak: memory.streak,
+      lastActiveDay: memory.lastActiveDay ?? null,
+      badges: memory.badges,
+      user: memory.user,
+      updatedAt: Timestamp.now(),
+    });
+
     await Promise.race([
-      setDoc(
-        docRef,
-        {
-          tasks: memory.tasks,
-          moods: memory.moods,
-          sessions: memory.sessions,
-          pet: memory.pet,
-          points: memory.points,
-          streak: memory.streak,
-          lastActiveDay: memory.lastActiveDay,
-          badges: memory.badges,
-          user: memory.user,
-          updatedAt: Timestamp.now(),
-        },
-        { merge: true }
-      ),
+      setDoc(docRef, dataToSave, { merge: true }),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3000)),
     ]);
   } catch (err) {
@@ -197,6 +310,7 @@ async function saveStateToFirestore(userId: string) {
 }
 
 async function loadStateFromFirestore(userId: string): Promise<Partial<LockInState> | null> {
+  if (!userId) return null;
   try {
     const docRef = doc(db, "users", userId);
     const docSnap: any = await Promise.race([
@@ -204,7 +318,7 @@ async function loadStateFromFirestore(userId: string): Promise<Partial<LockInSta
       new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3000)),
     ]);
     if (docSnap && docSnap.exists()) {
-      return docSnap.data();
+      return sanitizeLoadedState(docSnap.data());
     }
   } catch (err) {
     console.warn("Firestore load skipped (using local cache):", err);
@@ -231,8 +345,28 @@ if (typeof window !== "undefined") {
         email: firebaseUser.email || "",
         name: firebaseUser.displayName || memory.user?.name || firebaseUser.email?.split("@")[0] || "User",
       };
-      // Immediately set user in memory so UI reveals logged-in status with 0ms delay
-      memory = { ...memory, user };
+
+      // Check if we have saved local state for this returning user
+      const localData = loadUserState(user.id, user.email);
+      if (localData) {
+        memory = {
+          ...defaultState,
+          ...localData,
+          user,
+          theme: memory.theme,
+        };
+      } else if (!memory.user || memory.user.id !== user.id) {
+        memory = {
+          ...defaultState,
+          user,
+          theme: memory.theme,
+        };
+      } else {
+        memory = {
+          ...memory,
+          user,
+        };
+      }
       notifySubscribers();
 
       // Background load data from Firestore (if available)
@@ -241,15 +375,20 @@ if (typeof window !== "undefined") {
           memory = {
             ...memory,
             ...remoteData,
-            user, // Keep guaranteed valid user
+            user,
             theme: memory.theme,
           };
+          saveUserState(user.id, user.email, memory);
           notifySubscribers();
         }
       });
     } else {
-      memory = { ...defaultState, user: null };
-      notifySubscribers();
+      // Firebase auth state has no user; if no cached user exists in localStorage, clear memory
+      const cached = localStorage.getItem(USER_KEY);
+      if (!cached && memory.user) {
+        memory = { ...defaultState, user: null };
+        notifySubscribers();
+      }
     }
   });
 
@@ -389,8 +528,17 @@ export function useLockIn() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const firebaseUser = userCredential.user;
       const user: User = { id: firebaseUser.uid, email, name: name.trim() || email.split("@")[0] };
-      memory = { ...memory, user };
+      
+      // New user registering starts with fresh default state
+      const freshState: LockInState = {
+        ...defaultState,
+        user,
+        theme: memory.theme,
+      };
+      memory = freshState;
+      saveUserState(user.id, user.email, memory);
       notifySubscribers();
+
       // Non-blocking firestore save
       saveStateToFirestore(user.id);
       return { success: true };
@@ -406,15 +554,39 @@ export function useLockIn() {
       const user: User = {
         id: firebaseUser.uid,
         email: firebaseUser.email || email,
-        name: firebaseUser.displayName || memory.user?.name || email.split("@")[0],
+        name: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User",
       };
-      // Immediately set user and notify subscribers BEFORE returning
-      memory = { ...memory, user };
+
+      // Check for returning user's saved progress
+      const localData = loadUserState(user.id, user.email);
+      if (localData) {
+        // Returning user: restore all their progress!
+        memory = {
+          ...defaultState,
+          ...localData,
+          user,
+          theme: memory.theme,
+        };
+      } else {
+        // New to this device or fresh account
+        memory = {
+          ...defaultState,
+          user,
+          theme: memory.theme,
+        };
+      }
       notifySubscribers();
-      // Background load
+
+      // Background load from Firestore in case state was saved remotely
       loadStateFromFirestore(user.id).then((remoteData) => {
         if (remoteData) {
-          memory = { ...memory, ...remoteData, user };
+          memory = {
+            ...memory,
+            ...remoteData,
+            user,
+            theme: memory.theme,
+          };
+          saveUserState(user.id, user.email, memory);
           notifySubscribers();
         }
       });
@@ -426,10 +598,16 @@ export function useLockIn() {
 
   const logout = useCallback(async () => {
     try {
+      if (memory.user) {
+        // Save current user progress before signing out
+        saveUserState(memory.user.id, memory.user.email, memory);
+        await saveStateToFirestore(memory.user.id);
+      }
       await signOut(auth);
     } catch (err) {
       console.error("Logout error:", err);
     } finally {
+      // Reset memory to logged out state without wiping the user's stored progress
       memory = { ...defaultState, user: null };
       notifySubscribers();
     }

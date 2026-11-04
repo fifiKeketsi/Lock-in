@@ -26,8 +26,11 @@ dist-ssr
 # Build and framework cache
 .tanstack
 .vercel
+temp_edge_profile/
+*.tmp
 
 # Environment variables
 .env
 .env.*
 !.env.example
+

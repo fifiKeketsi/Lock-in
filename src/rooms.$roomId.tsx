@@ -2,21 +2,45 @@ import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { VideoRoom } from "@/components/VideoRoom";
-import { ensureRoomFromLink, useRoom } from "@/lib/rooms";
+import { ensureRoomFromLink, useRoom, type RoomTimerPhase } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
-import { Copy, Send, Play, Square, ArrowLeft, Target, Users, Sparkles, Check } from "lucide-react";
+import {
+  Copy,
+  Send,
+  Play,
+  Square,
+  ArrowLeft,
+  Target,
+  Users,
+  Sparkles,
+  Check,
+  Shield,
+  ShieldAlert,
+  Coffee,
+  Smartphone,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
+import { HardBlockSelector } from "@/components/HardBlockSelector";
+import { ProcrastinationNudgeModal } from "@/components/ProcrastinationNudgeModal";
+import {
+  getSavedBlockedDomains,
+  saveBlockedDomains,
+  buildExtensionZip,
+} from "@/lib/app-blocking";
+import { playAlertNudge, playBreakChime, playStartChime } from "@/lib/sound";
 
 export const Route = createFileRoute("/rooms/$roomId")({
   head: () => ({
     meta: [
       { title: "Focus Room · Lock-In" },
-      { name: "description", content: "Join a shared peer-to-peer study session with friends." },
+      { name: "description", content: "Join a shared peer-to-peer study session with friends with hard distraction locking and strict study-to-break ratios." },
     ],
   }),
   component: RoomPage,
 });
 
-function RoomPage() {
+export function RoomPage() {
   const { roomId } = useParams({ from: "/rooms/$roomId" });
   const { state } = useLockIn();
   const [copied, setCopied] = useState(false);
@@ -51,8 +75,19 @@ function RoomPage() {
   } = useRoom(roomId, state.user);
 
   const [msg, setMsg] = useState("");
-  const [duration, setDuration] = useState(25);
+  const [studyDuration, setStudyDuration] = useState(25);
+  const [breakDuration, setBreakDuration] = useState(5);
+  const [showShieldDetails, setShowShieldDetails] = useState(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // Distraction Shield State
+  const [blockedDomains, setBlockedDomains] = useState<string[]>(() => getSavedBlockedDomains());
+
+  // Procrastination Nudge State
+  const [showNudgeModal, setShowNudgeModal] = useState(false);
+  const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit">("blur");
+  const [nudgeCount, setNudgeCount] = useState(0);
+  const hasTriggeredNudge = useRef(false);
 
   const myGoal = room?.members.find((m) => m.id === me.id)?.goal ?? "";
 
@@ -89,6 +124,89 @@ function RoomPage() {
       ? Math.max(0, new Date(room.timer.startedAt).getTime() + room.timer.durationMin * 60_000 - Date.now())
       : remaining;
 
+  const currentPhase: RoomTimerPhase = room?.timer.phase || "study";
+  const isRoomHardBlockActive = Boolean(room?.timer.running && currentPhase === "study");
+
+  // Handle phase transitions when timer reaches 0
+  const prevRemainingRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!room?.timer.running || liveRemaining === null) return;
+
+    if (prevRemainingRef.current !== null && prevRemainingRef.current > 0 && liveRemaining <= 0) {
+      if (currentPhase === "study") {
+        playBreakChime();
+        const nextBreak = room.timer.breakDurationMin || 5;
+        startTimer(nextBreak, 5, "break");
+      } else {
+        playStartChime();
+        stopTimer();
+      }
+    }
+    prevRemainingRef.current = liveRemaining;
+  }, [liveRemaining, currentPhase, room?.timer, startTimer, stopTimer]);
+
+  // Active Procrastination Nudge in Rooms
+  useEffect(() => {
+    if (!isRoomHardBlockActive) return;
+
+    const triggerNudge = (reason: "blur" | "motion" | "mouse" | "exit") => {
+      if (hasTriggeredNudge.current) return;
+      hasTriggeredNudge.current = true;
+      setNudgeCount((c) => c + 1);
+      setNudgeReason(reason);
+      setShowNudgeModal(true);
+      playAlertNudge();
+
+      // Send gentle accountability notice to room chat
+      sendMessage(`⚠️ [Nudge] Picked up device or left focus screen during Deep Work! Returning to desk.`);
+
+      setTimeout(() => {
+        hasTriggeredNudge.current = false;
+      }, 10000);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) triggerNudge("exit");
+    };
+
+    const handleBlur = () => {
+      triggerNudge("blur");
+    };
+
+    const handleMouseLeave = (e: MouseEvent) => {
+      if (e.clientY <= 5) triggerNudge("mouse");
+    };
+
+    let initialBeta: number | null = null;
+    let initialGamma: number | null = null;
+
+    const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
+      if (e.beta == null || e.gamma == null) return;
+      if (initialBeta === null || initialGamma === null) {
+        initialBeta = e.beta;
+        initialGamma = e.gamma;
+        return;
+      }
+      if (Math.abs(e.beta - initialBeta) > 35 || Math.abs(e.gamma - initialGamma) > 35) {
+        triggerNudge("motion");
+        initialBeta = e.beta;
+        initialGamma = e.gamma;
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleBlur);
+    document.addEventListener("mouseleave", handleMouseLeave);
+    window.addEventListener("deviceorientation", handleDeviceOrientation);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("mouseleave", handleMouseLeave);
+      window.removeEventListener("deviceorientation", handleDeviceOrientation);
+    };
+  }, [isRoomHardBlockActive, sendMessage]);
+
   const mm = liveRemaining != null ? String(Math.floor(liveRemaining / 60000)).padStart(2, "0") : "--";
   const ss = liveRemaining != null ? String(Math.floor((liveRemaining % 60000) / 1000)).padStart(2, "0") : "--";
 
@@ -103,7 +221,21 @@ function RoomPage() {
     }
   };
 
-  // Guest Join Screen with StudyFetch card styling
+  const handleBlockedDomainsChange = (domains: string[]) => {
+    setBlockedDomains(domains);
+    saveBlockedDomains(domains);
+  };
+
+  const handleDownloadExtension = () => {
+    const blob = buildExtensionZip(blockedDomains);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "lockin-extension.zip";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  // Guest Join Screen
   if (!state.user && !hasJoinedGuest) {
     return (
       <div className="min-h-screen bg-background flex flex-col">
@@ -175,41 +307,97 @@ function RoomPage() {
   return (
     <div className="min-h-screen bg-background">
       <AppNav />
+
+      {/* Active Procrastination Nudge Modal Alert */}
+      <ProcrastinationNudgeModal
+        isOpen={showNudgeModal}
+        onDismiss={() => setShowNudgeModal(false)}
+        reason={nudgeReason}
+        timeRemainingFormatted={`${mm}:${ss}`}
+        blockedCount={blockedDomains.length}
+        nudgeCount={nudgeCount}
+      />
+
       <main className="mx-auto max-w-5xl px-4 py-6 md:py-8 space-y-6">
         {/* Top Floating Action Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link
             to="/rooms"
             onClick={leave}
-            className="sfb-btn-secondary inline-flex items-center gap-1.5 text-xs py-1.5 px-3.5"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
           >
-            <ArrowLeft className="size-3.5" /> All Study Rooms
+            <ArrowLeft className="size-3.5" /> Leave Room
           </Link>
-          <button
-            onClick={copyLink}
-            className="sfb-btn-primary inline-flex items-center gap-1.5 text-xs py-1.5 px-4"
-          >
-            {copied ? <Check className="size-3.5 text-[#22c55e]" /> : <Copy className="size-3.5" />}
-            <span>{copied ? "Link Copied!" : "Copy Invite Link"}</span>
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowShieldDetails((v) => !v)}
+              className="sfb-btn-secondary text-xs py-1.5 px-3 inline-flex items-center gap-1.5 font-semibold"
+            >
+              {isRoomHardBlockActive ? (
+                <ShieldAlert className="size-3.5 text-[#ef4444] animate-pulse" />
+              ) : (
+                <Shield className="size-3.5 text-[#f98538]" />
+              )}
+              <span>Distraction Shield ({blockedDomains.length})</span>
+              {showShieldDetails ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+            </button>
+
+            <button
+              onClick={copyLink}
+              className="sfb-btn-primary text-xs py-1.5 px-3.5 inline-flex items-center gap-1.5"
+            >
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              <span>{copied ? "Link Copied!" : "Invite Friends"}</span>
+            </button>
+          </div>
         </div>
 
-        {/* Room Header with StudyFetch Bento Styling */}
+        {/* Expandable Distraction Shield Drawer */}
+        {showShieldDetails && (
+          <div className="animate-in fade-in zoom-in-95 duration-200">
+            <HardBlockSelector
+              blockedDomains={blockedDomains}
+              onChange={handleBlockedDomainsChange}
+              isLocked={isRoomHardBlockActive}
+              onDownloadExtension={handleDownloadExtension}
+            />
+          </div>
+        )}
+
+        {/* Room Header & Synchronized Study-to-Break Timer */}
         <header className="sfb-card p-6 md:p-8">
-          <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <span className="sfb-badge-lemon text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                   Room #{room.id}
                 </span>
-                <span className="sfb-badge-teal text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                  WebRTC Mesh
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider inline-flex items-center gap-1 ${currentPhase === "study"
+                      ? isRoomHardBlockActive
+                        ? "bg-[#ef4444]/15 text-[#ef4444] border border-[#ef4444]/30"
+                        : "sfb-badge-lime"
+                      : "bg-sky-500/15 text-sky-500 border border-sky-500/30"
+                    }`}
+                >
+                  {currentPhase === "study" ? (
+                    <>
+                      <ShieldAlert className="size-3" />
+                      {isRoomHardBlockActive ? "Hard App Lock Active" : "Deep Work Phase"}
+                    </>
+                  ) : (
+                    <>
+                      <Coffee className="size-3" />
+                      Group Break · Apps Unlocked
+                    </>
+                  )}
                 </span>
               </div>
               <h1 className="font-display text-2xl md:text-3xl font-bold tracking-tight text-foreground">
                 {room.name}
               </h1>
-              
+
               {/* Live Member Status Indicator */}
               <div className="flex items-center gap-2 pt-0.5">
                 <span className="relative flex size-2.5">
@@ -227,15 +415,23 @@ function RoomPage() {
               </div>
             </div>
 
-            {/* Concurrent Group Timer Widget */}
-            <div className="rounded-3xl bg-[#f7f6ef] dark:bg-[#191919] border border-border p-4 text-center min-w-[200px] shadow-xs">
-              <div className="text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground mb-0.5">
-                Concurrent Timer
+            {/* Concurrent Group Study-to-Break Timer Widget */}
+            <div className="rounded-3xl bg-[#f7f6ef] dark:bg-[#191919] border border-border p-4 text-center min-w-[240px] shadow-xs space-y-2">
+              <div className="text-[10px] font-extrabold uppercase tracking-widest text-muted-foreground">
+                {currentPhase === "study" ? "Deep Work Block" : "Group Break Time"}
               </div>
-              <div className="font-display text-3xl md:text-4xl tabular-nums font-bold text-foreground">
+              <div
+                className={`font-display text-3xl md:text-4xl tabular-nums font-bold ${currentPhase === "study"
+                    ? isRoomHardBlockActive
+                      ? "text-[#ef4444]"
+                      : "text-foreground"
+                    : "text-sky-500"
+                  }`}
+              >
                 {mm}:{ss}
               </div>
-              <div className="mt-2 flex items-center justify-center gap-2">
+
+              <div className="flex items-center justify-center gap-2">
                 {room.timer.running ? (
                   <button
                     onClick={stopTimer}
@@ -244,25 +440,49 @@ function RoomPage() {
                     <Square className="size-3" /> Stop Timer
                   </button>
                 ) : (
-                  <>
-                    <input
-                      type="number"
-                      min={5}
-                      max={90}
-                      value={duration}
-                      onChange={(e) => setDuration(Number(e.target.value))}
-                      className="w-13 h-7 rounded-full border border-border bg-card px-2 text-xs text-center font-bold"
-                      title="Timer duration"
-                    />
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1 text-[11px] font-bold">
+                      <input
+                        type="number"
+                        min={5}
+                        max={90}
+                        value={studyDuration}
+                        onChange={(e) => setStudyDuration(Number(e.target.value))}
+                        className="w-11 h-7 rounded-full border border-border bg-card px-1 text-xs text-center font-bold"
+                        title="Study minutes"
+                      />
+                      <span>m</span>
+                      <span className="text-muted-foreground">/</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={breakDuration}
+                        onChange={(e) => setBreakDuration(Number(e.target.value))}
+                        className="w-10 h-7 rounded-full border border-border bg-card px-1 text-xs text-center font-bold text-sky-500"
+                        title="Break minutes"
+                      />
+                      <span className="text-sky-500">m</span>
+                    </div>
+
                     <button
-                      onClick={() => startTimer(duration)}
-                      className="sfb-btn-primary inline-flex items-center gap-1 text-xs py-1 px-3.5"
+                      onClick={() => {
+                        playStartChime();
+                        startTimer(studyDuration, breakDuration, "study");
+                      }}
+                      className="sfb-btn-primary inline-flex items-center gap-1 text-xs py-1 px-3"
                     >
                       <Play className="size-3" /> Start
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
+
+              {isRoomHardBlockActive && (
+                <div className="text-[10px] font-semibold text-[#ef4444] flex items-center justify-center gap-1">
+                  <Smartphone className="size-3" /> Anti-Procrastination Armed
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -365,11 +585,10 @@ function RoomPage() {
                     <div key={m.id} className={`flex gap-2 ${mine ? "justify-end" : ""}`}>
                       {!mine && <div className="text-xl leading-none pt-0.5">{m.emoji}</div>}
                       <div
-                        className={`max-w-[78%] rounded-2xl px-4 py-2 text-xs shadow-xs ${
-                          mine
+                        className={`max-w-[78%] rounded-2xl px-4 py-2 text-xs shadow-xs ${mine
                             ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919]"
                             : "bg-secondary text-foreground"
-                        }`}
+                          }`}
                       >
                         {!mine && <div className="text-[10px] font-bold opacity-75 mb-0.5">{m.name}</div>}
                         <div className="break-words whitespace-pre-wrap leading-relaxed">{m.text}</div>

@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { AppNav } from "@/components/AppNav";
 import { createRoom, listRooms, deleteRoom, getMe, saveMe, type Room } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
-import { Users, Plus, Trash2, ArrowRight, Video } from "lucide-react";
+import { Users, Plus, Trash2, ArrowRight } from "lucide-react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -42,7 +42,7 @@ function RoomsPage() {
         }
       );
       return () => unsub();
-    } catch {}
+    } catch { }
   }, []);
 
   const onCreate = async () => {
@@ -76,9 +76,6 @@ function RoomsPage() {
       <main className="mx-auto max-w-4xl px-4 py-8 md:py-12 space-y-8">
         {/* Header */}
         <header className="space-y-3">
-          <span className="sfb-badge-teal text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1.5">
-            <Video className="size-3" /> Live Mesh Network
-          </span>
           <h1 className="font-display text-3xl md:text-4xl font-bold tracking-tight text-foreground">
             Lock in together.<br />
             <span className="font-editorial italic font-normal text-muted-foreground">Study rooms with live video & chat.</span>

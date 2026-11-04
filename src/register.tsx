@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useLockIn } from "@/lib/store";
 import { User, Key, UserPlus, ArrowRight } from "lucide-react";
@@ -24,8 +24,13 @@ function RegisterPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (state.user) {
+      navigate({ to: "/" });
+    }
+  }, [state.user, navigate]);
+
   if (state.user) {
-    navigate({ to: "/" });
     return null;
   }
 

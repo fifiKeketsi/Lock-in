@@ -31,10 +31,14 @@ export interface RoomMessage {
   at: string;
 }
 
+export type RoomTimerPhase = "study" | "break";
+
 export interface RoomTimer {
   running: boolean;
   startedAt?: string;
   durationMin: number;
+  breakDurationMin?: number;
+  phase?: RoomTimerPhase;
 }
 
 export interface Room {
@@ -179,7 +183,7 @@ export async function createRoom(
       { merge: true }
     ),
     new Promise((resolve) => setTimeout(resolve, 1500)),
-  ]).catch(() => {});
+  ]).catch(() => { });
 
   return newRoom;
 }
@@ -193,7 +197,7 @@ export async function deleteRoom(id: string) {
   delete rooms[id];
   saveLocalRooms(rooms);
   try {
-    deleteDoc(doc(db, "rooms", id)).catch(() => {});
+    deleteDoc(doc(db, "rooms", id)).catch(() => { });
   } catch (err) {
     console.warn("Error deleting room in Firestore:", err);
   }
@@ -247,7 +251,7 @@ export async function ensureRoomFromLink(
       { merge: true }
     ),
     new Promise((resolve) => setTimeout(resolve, 1500)),
-  ]).catch(() => {});
+  ]).catch(() => { });
 
   return placeholder;
 }
@@ -312,7 +316,7 @@ export function useRoom(
             urls: [
               "wss://relay.damus.io",
               "wss://nos.lol",
-              "wss://relay.snort.social",
+              "wss://nostr.mom",
               "wss://relay.primal.net",
               "wss://nostr.wine",
             ],
@@ -465,7 +469,7 @@ export function useRoom(
       bc?.close();
       try {
         roomInstance?.leave();
-      } catch {}
+      } catch { }
       setTrysteroRoom(null);
     };
   }, [roomId, me.id]);
@@ -482,12 +486,14 @@ export function useRoom(
   };
 
   const startTimer = useCallback(
-    (durationMin: number) => {
+    (durationMin: number, breakDurationMin: number = 5, phase: RoomTimerPhase = "study") => {
       if (!roomId) return;
       const timer: RoomTimer = {
         running: true,
         startedAt: new Date().toISOString(),
         durationMin,
+        breakDurationMin,
+        phase,
       };
 
       setRoomData((prev) => ({ ...prev, timer }));
@@ -503,14 +509,14 @@ export function useRoom(
       }
 
       // Archival write to Firestore (if available)
-      setDoc(doc(db, "rooms", roomId), { timer }, { merge: true }).catch(() => {});
+      setDoc(doc(db, "rooms", roomId), { timer }, { merge: true }).catch(() => { });
     },
     [roomId, trysteroRoom]
   );
 
   const stopTimer = useCallback(() => {
     if (!roomId) return;
-    const timer: RoomTimer = { running: false, durationMin: 25 };
+    const timer: RoomTimer = { running: false, durationMin: 25, breakDurationMin: 5, phase: "study" };
 
     setRoomData((prev) => ({ ...prev, timer }));
 
@@ -523,7 +529,7 @@ export function useRoom(
       console.warn("Timer stop warning:", e);
     }
 
-    setDoc(doc(db, "rooms", roomId), { timer }, { merge: true }).catch(() => {});
+    setDoc(doc(db, "rooms", roomId), { timer }, { merge: true }).catch(() => { });
   }, [roomId, trysteroRoom]);
 
   const sendMessage = useCallback(
@@ -553,7 +559,7 @@ export function useRoom(
         console.warn("Chat broadcast warning:", e);
       }
 
-      addDoc(collection(db, "rooms", roomId, "messages"), newMsg).catch(() => {});
+      addDoc(collection(db, "rooms", roomId, "messages"), newMsg).catch(() => { });
     },
     [roomId, trysteroRoom]
   );
@@ -581,14 +587,14 @@ export function useRoom(
             const patchAction = trysteroRoom.makeAction("patch");
             patchAction.send({ memberId: me.id, patch: { goal } });
           }
-        } catch {}
+        } catch { }
 
-        setDoc(doc(db, "rooms", roomId, "participants", me.id), { goal, lastSeen: Date.now() }, { merge: true }).catch(() => {});
+        setDoc(doc(db, "rooms", roomId, "participants", me.id), { goal, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
         return { ...prev, [me.id]: updated };
       });
     },
-    [roomId, me.id, trysteroRoom]
+    [roomId, me.id, me.name, me.emoji, trysteroRoom]
   );
 
   const toggleMic = useCallback(() => {
@@ -614,13 +620,13 @@ export function useRoom(
           const patchAction = trysteroRoom.makeAction("patch");
           patchAction.send({ memberId: me.id, patch: { micOn: nextMic } });
         }
-      } catch {}
+      } catch { }
 
-      setDoc(doc(db, "rooms", roomId, "participants", me.id), { micOn: nextMic, lastSeen: Date.now() }, { merge: true }).catch(() => {});
+      setDoc(doc(db, "rooms", roomId, "participants", me.id), { micOn: nextMic, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
       return { ...prev, [me.id]: updated };
     });
-  }, [roomId, me.id, trysteroRoom]);
+  }, [roomId, me.id, me.name, me.emoji, trysteroRoom]);
 
   const toggleCamera = useCallback(() => {
     if (!roomId) return;
@@ -645,13 +651,13 @@ export function useRoom(
           const patchAction = trysteroRoom.makeAction("patch");
           patchAction.send({ memberId: me.id, patch: { cameraOn: nextCam } });
         }
-      } catch {}
+      } catch { }
 
-      setDoc(doc(db, "rooms", roomId, "participants", me.id), { cameraOn: nextCam, lastSeen: Date.now() }, { merge: true }).catch(() => {});
+      setDoc(doc(db, "rooms", roomId, "participants", me.id), { cameraOn: nextCam, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
       return { ...prev, [me.id]: updated };
     });
-  }, [roomId, me.id, trysteroRoom]);
+  }, [roomId, me.id, me.name, me.emoji, trysteroRoom]);
 
   const updateProfile = useCallback(
     (name: string, emoji?: string) => {
@@ -677,9 +683,9 @@ export function useRoom(
             const patchAction = trysteroRoom.makeAction("patch");
             patchAction.send({ memberId: me.id, patch: { name, emoji: newEmoji } });
           }
-        } catch {}
+        } catch { }
 
-        setDoc(doc(db, "rooms", roomId, "participants", me.id), { name, emoji: newEmoji, lastSeen: Date.now() }, { merge: true }).catch(() => {});
+        setDoc(doc(db, "rooms", roomId, "participants", me.id), { name, emoji: newEmoji, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
         return { ...prev, [me.id]: updated };
       });
@@ -697,8 +703,8 @@ export function useRoom(
     if (!roomId) return;
     try {
       trysteroRoom?.leave();
-    } catch {}
-    deleteDoc(doc(db, "rooms", roomId, "participants", me.id)).catch(() => {});
+    } catch { }
+    deleteDoc(doc(db, "rooms", roomId, "participants", me.id)).catch(() => { });
   }, [roomId, me.id, trysteroRoom]);
 
   return {

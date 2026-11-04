@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { Heart, Sunrise, Moon, Lock, ArrowLeft, Check } from "lucide-react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Sunrise, Moon, Lock, ArrowLeft, Check } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
 import { useLockIn } from "@/lib/store";
 
@@ -24,6 +24,7 @@ const EMOJIS = [
 
 function CheckinPage() {
   const { state, addMood } = useLockIn();
+  const navigate = useNavigate();
   const hour = new Date().getHours();
   const defaultType: "morning" | "evening" = hour < 16 ? "morning" : "evening";
   const [type, setType] = useState<"morning" | "evening">(defaultType);
@@ -31,49 +32,36 @@ function CheckinPage() {
   const [note, setNote] = useState("");
   const [saved, setSaved] = useState(false);
 
-  if (!state.user) {
-    return (
-      <div className="min-h-screen bg-background flex flex-col">
-        <AppNav />
-        <main className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md sfb-card p-8 md:p-10 text-center space-y-6">
-            <div className="mx-auto size-16 rounded-3xl sfb-badge-peach flex items-center justify-center text-foreground">
-              <Lock className="size-8" />
-            </div>
-            <div className="space-y-2">
-              <span className="sfb-badge-pink text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                Account Required
-              </span>
-              <h1 className="text-2xl font-bold font-display text-foreground">
-                Sign In to Log Reflections
-              </h1>
-              <p className="text-muted-foreground text-xs leading-relaxed max-w-xs mx-auto">
-                Log in or create an account to record your energy levels, mood check-ins, and study insights over time.
-              </p>
-            </div>
+  const handleSelectType = (t: "morning" | "evening") => {
+    if (!state.user) {
+      navigate({ to: "/login" });
+      return;
+    }
+    setType(t);
+  };
 
-            <div className="space-y-2.5 pt-2">
-              <Link
-                to="/login"
-                className="w-full sfb-btn-primary inline-flex items-center justify-center py-3 text-xs font-semibold"
-              >
-                Log In
-              </Link>
-              <Link
-                to="/register"
-                className="w-full sfb-btn-secondary inline-flex items-center justify-center py-3 text-xs font-semibold"
-              >
-                Create Account
-              </Link>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  const handleSelectEnergy = (val: number) => {
+    if (!state.user) {
+      navigate({ to: "/login" });
+      return;
+    }
+    setEnergy(val);
+  };
+
+  const handleNoteChange = (val: string) => {
+    if (!state.user) {
+      navigate({ to: "/login" });
+      return;
+    }
+    setNote(val);
+  };
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!state.user) {
+      navigate({ to: "/login" });
+      return;
+    }
     addMood({ type, energy, note, date: new Date().toISOString().slice(0, 10) });
     setSaved(true);
     setNote("");
@@ -85,9 +73,6 @@ function CheckinPage() {
       <AppNav />
       <main className="mx-auto max-w-2xl px-4 py-8 md:py-12 space-y-6">
         <div className="space-y-2 text-center md:text-left">
-          <span className="sfb-badge-peach inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-            <Heart className="size-3" /> Daily Reflection
-          </span>
           <h1 className="font-display text-3xl md:text-4xl font-bold text-foreground">
             How is your focus energy?<br />
             <span className="font-editorial italic font-normal text-muted-foreground">Check in with your mind.</span>
@@ -97,6 +82,18 @@ function CheckinPage() {
           </p>
         </div>
 
+        {!state.user && (
+          <div className="sfb-card p-4 bg-secondary/40 border border-border flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Lock className="size-4 shrink-0" />
+              <span>Log in to save daily energy ratings and track reflection insights over time.</span>
+            </div>
+            <Link to="/login" className="sfb-btn-primary text-xs py-1.5 px-4 font-bold shrink-0">
+              Log In
+            </Link>
+          </div>
+        )}
+
         <form onSubmit={submit} className="sfb-card p-6 md:p-8 space-y-6">
           {/* Morning / Evening Toggle Pills */}
           <div className="grid grid-cols-2 gap-2 bg-secondary/50 p-1 rounded-full">
@@ -104,12 +101,11 @@ function CheckinPage() {
               <button
                 type="button"
                 key={t}
-                onClick={() => setType(t)}
-                className={`inline-flex items-center justify-center gap-2 rounded-full py-2.5 text-xs font-bold capitalize transition-all ${
-                  type === t
+                onClick={() => handleSelectType(t)}
+                className={`inline-flex items-center justify-center gap-2 rounded-full py-2.5 text-xs font-bold capitalize transition-all ${type === t
                     ? "bg-[#191919] text-[#faf9f5] dark:bg-[#faf9f5] dark:text-[#191919] shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
-                }`}
+                  }`}
               >
                 {t === "morning" ? <Sunrise className="size-4 text-[#f59e0b]" /> : <Moon className="size-4 text-[#6366f1]" />}
                 <span>{t} Check-in</span>
@@ -128,12 +124,11 @@ function CheckinPage() {
                 <button
                   key={i}
                   type="button"
-                  onClick={() => setEnergy(i + 1)}
-                  className={`h-16 rounded-2xl border flex flex-col items-center justify-center text-2xl transition-all duration-200 ${
-                    energy === i + 1
+                  onClick={() => handleSelectEnergy(i + 1)}
+                  className={`h-16 rounded-2xl border flex flex-col items-center justify-center text-2xl transition-all duration-200 ${energy === i + 1
                       ? "border-foreground bg-card scale-105 shadow-md"
                       : "border-border bg-card/60 hover:border-foreground/30 hover:scale-102"
-                  }`}
+                    }`}
                 >
                   <span>{item.emoji}</span>
                   <span className="text-[10px] font-semibold text-muted-foreground mt-0.5">{item.label}</span>
@@ -147,7 +142,7 @@ function CheckinPage() {
             <label className="text-xs font-bold text-foreground">Personal Reflection Note</label>
             <textarea
               value={note}
-              onChange={(e) => setNote(e.target.value)}
+              onChange={(e) => handleNoteChange(e.target.value)}
               placeholder={type === "morning" ? "What is the single most important task to crush today?" : "What went well today? What can we improve tomorrow?"}
               className="w-full min-h-[90px] rounded-2xl border border-border bg-card p-3.5 text-xs md:text-sm outline-none focus:ring-1 focus:ring-foreground leading-relaxed"
             />
