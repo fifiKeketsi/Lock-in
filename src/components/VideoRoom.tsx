@@ -204,12 +204,22 @@ export function VideoRoom({
       setRemoteStreams((prev) => ({ ...prev, [peerId]: stream }));
     };
 
+    const originalOnPeerLeave = trysteroRoom.onPeerLeave;
     trysteroRoom.onPeerLeave = (peerId: string) => {
+      if (typeof originalOnPeerLeave === "function") {
+        originalOnPeerLeave(peerId);
+      }
       setRemoteStreams((prev) => {
         const next = { ...prev };
         delete next[peerId];
         return next;
       });
+    };
+
+    return () => {
+      if (trysteroRoom) {
+        trysteroRoom.onPeerLeave = originalOnPeerLeave;
+      }
     };
   }, [trysteroRoom, localStream]);
 

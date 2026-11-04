@@ -23,7 +23,7 @@ const GAMES: { id: GameId; name: string; tag: string; icon: React.ComponentType<
   { id: "connectdots", name: "Connect Dots: Puzzle Challenge", tag: "~45s", icon: Circle, desc: "Connect dots without crossing paths." },
 ];
 
-function WarmupPage() {
+function WarmupPage(): React.JSX.Element | null {
   const { state } = useLockIn();
   const navigate = useNavigate();
   const [game, setGame] = useState<GameId>("wordle");

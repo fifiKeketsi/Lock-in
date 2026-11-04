@@ -154,13 +154,15 @@ export function AppNav() {
   );
 }
 
+type NavRoutePath = "/" | "/focus" | "/rooms" | "/warmup" | "/checkin" | "/reports";
+
 function NavLink({
   to,
   icon,
   children,
   badge,
 }: {
-  to: string;
+  to: NavRoutePath;
   icon: React.ReactNode;
   children: React.ReactNode;
   badge?: string;
@@ -183,7 +185,7 @@ function NavLink({
   );
 }
 
-function MobileNavLink({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+function MobileNavLink({ to, icon, label }: { to: NavRoutePath; icon: React.ReactNode; label: string }) {
   return (
     <Link
       to={to}

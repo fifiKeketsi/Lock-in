@@ -14,7 +14,7 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-function LoginPage() {
+function LoginPage(): React.JSX.Element | null {
   const { login, state } = useLockIn();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");

@@ -13,7 +13,7 @@ export const Route = createFileRoute("/reports")({
   component: ReportsPage,
 });
 
-function ReportsPage() {
+function ReportsPage(): React.JSX.Element | null {
   const { state } = useLockIn();
 
   const days = Array.from({ length: 7 }, (_, i) => {

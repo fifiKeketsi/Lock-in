@@ -22,7 +22,7 @@ const EMOJIS = [
   { emoji: "🚀", label: "Locked In" },
 ];
 
-function CheckinPage() {
+function CheckinPage(): React.JSX.Element | null {
   const { state, addMood } = useLockIn();
   const navigate = useNavigate();
   const hour = new Date().getHours();

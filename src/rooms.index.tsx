@@ -17,7 +17,7 @@ export const Route = createFileRoute("/rooms/")({
   component: RoomsPage,
 });
 
-function RoomsPage() {
+function RoomsPage(): React.JSX.Element | null {
   const { state } = useLockIn();
   const navigate = useNavigate();
   const [rooms, setRooms] = useState(() => listRooms());
@@ -55,10 +55,10 @@ function RoomsPage() {
       const r = await createRoom(name.trim() || "Focus Study Room", state.user);
       setName("");
       refresh();
-      navigate({ to: "/rooms/$roomId", params: { roomId: r.id } });
+      navigate({ to: "/rooms/$roomId", params: { roomId: r.id.toLowerCase() } });
     } catch (err) {
       console.warn("Create room error:", err);
-      window.location.href = `/rooms/ROOM${Date.now().toString(36).slice(-4).toUpperCase()}`;
+      window.location.href = `/rooms/room${Date.now().toString(36).slice(-4).toLowerCase()}`;
     } finally {
       setCreating(false);
     }
@@ -169,7 +169,7 @@ function RoomsPage() {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <Link
                       to="/rooms/$roomId"
-                      params={{ roomId: r.id }}
+                      params={{ roomId: r.id.toLowerCase() }}
                       className="sfb-btn-primary text-xs py-1.5 px-3.5 inline-flex items-center gap-1"
                     >
                       <span>Enter</span>

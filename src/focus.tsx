@@ -21,6 +21,11 @@ import {
   getSavedBlockedDomains,
   saveBlockedDomains,
   buildExtensionZip,
+  getActiveFocusSession,
+  saveActiveFocusSession,
+  clearActiveFocusSession,
+  FOCUS_SYNC_CHANNEL,
+  type ActiveFocusSessionState,
 } from "@/lib/app-blocking";
 import { playAlertNudge, playBreakChime, playStartChime } from "@/lib/sound";
 
@@ -58,19 +63,51 @@ const RATIO_PRESETS: RatioPreset[] = [
   { id: "ultradian", label: "90m Study · 15m Break", studyMin: 90, breakMin: 15, badge: "Ultradian Flow (6:1)" },
 ];
 
-function FocusPage() {
-  const { taskId, blocked: blockedQuery } = Route.useSearch();
+function FocusPage(): React.JSX.Element | null {
+  const { taskId: searchTaskId, blocked: blockedQuery } = Route.useSearch();
   const { state, addSession, completeTask } = useLockIn();
   const navigate = useNavigate();
-  const task = state.tasks.find((t) => t.id === taskId);
 
-  // Study-to-Break Ratio State
-  const [studyDuration, setStudyDuration] = useState(25);
-  const [breakDuration, setBreakDuration] = useState(5);
-  const [phase, setPhase] = useState<TimerPhase>("study");
-  const [remaining, setRemaining] = useState(25 * 60);
-  const [running, setRunning] = useState(false);
+  const tabIdRef = useRef<string>(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  );
+
+  const initialSession = useRef<ActiveFocusSessionState | null>(getActiveFocusSession());
+  const effectiveTaskId = searchTaskId || (initialSession.current?.mode === "solo" ? initialSession.current.taskId : undefined);
+  const task = state.tasks.find((t) => t.id === effectiveTaskId);
+
+  // Study-to-Break Ratio State (restored from active in-progress session if present)
+  const [studyDuration, setStudyDuration] = useState<number>(() =>
+    initialSession.current?.mode === "solo" ? initialSession.current.studyDuration : 25
+  );
+  const [breakDuration, setBreakDuration] = useState<number>(() =>
+    initialSession.current?.mode === "solo" ? initialSession.current.breakDuration : 5
+  );
+  const [phase, setPhase] = useState<TimerPhase>(() =>
+    initialSession.current?.mode === "solo" ? initialSession.current.phase : "study"
+  );
+  const [running, setRunning] = useState<boolean>(() =>
+    initialSession.current?.mode === "solo" ? Boolean(initialSession.current.running) : false
+  );
+  const [remaining, setRemaining] = useState<number>(() => {
+    const s = initialSession.current;
+    if (s && s.mode === "solo") {
+      if (s.running && s.endTime) {
+        return Math.max(1, Math.ceil((s.endTime - Date.now()) / 1000));
+      }
+      if (s.remainingSec > 0) return s.remainingSec;
+    }
+    return 25 * 60;
+  });
   const [done, setDone] = useState(false);
+
+  const endTimeRef = useRef<number | null>(
+    initialSession.current?.mode === "solo" && initialSession.current.running && initialSession.current.endTime
+      ? initialSession.current.endTime
+      : null
+  );
 
   // Blocked Apps State
   const [blockedDomains, setBlockedDomains] = useState<string[]>(() => {
@@ -82,9 +119,12 @@ function FocusPage() {
   });
 
   // Active Procrastination Nudge State
-  const [nudgesTriggered, setNudgesTriggered] = useState(0);
+  const [nudgesTriggered, setNudgesTriggered] = useState<number>(() =>
+    initialSession.current?.mode === "solo" ? initialSession.current.nudgesTriggered || 0 : 0
+  );
   const [showNudgeModal, setShowNudgeModal] = useState(false);
-  const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit">("blur");
+  const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit" | "blocked">("blur");
+  const [blockedDomainAlert, setBlockedDomainAlert] = useState<string | null>(null);
   const hasTriggeredNudgeInCycle = useRef(false);
 
   // Feedback State
@@ -92,9 +132,178 @@ function FocusPage() {
   const [difficulty, setDifficulty] = useState(3);
   const [feedback, setFeedback] = useState("");
 
-  // Sync remaining when duration changes (only if stopped)
+  // Persist solo session state and sync across tabs so redirecting back always resumes the exact timer in progress
   useEffect(() => {
-    if (!running) {
+    const active = getActiveFocusSession();
+    // Do not overwrite an active study room timer if this solo timer isn't running
+    if (!running && active?.mode === "room" && active.running) return;
+
+    const sessionState: ActiveFocusSessionState = {
+      mode: "solo",
+      originPath: effectiveTaskId ? `/focus?taskId=${encodeURIComponent(effectiveTaskId)}` : "/focus",
+      taskId: effectiveTaskId,
+      running,
+      phase,
+      studyDuration,
+      breakDuration,
+      endTime: running ? endTimeRef.current : null,
+      remainingSec: remaining,
+      nudgesTriggered,
+      updatedAt: Date.now(),
+    };
+    saveActiveFocusSession(sessionState);
+
+    if (typeof BroadcastChannel !== "undefined") {
+      try {
+        const bc = new BroadcastChannel(FOCUS_SYNC_CHANNEL);
+        bc.postMessage({
+          type: "STATE_SYNC",
+          session: sessionState,
+          senderTabId: tabIdRef.current,
+        });
+        bc.close();
+      } catch {}
+    }
+  }, [running, phase, studyDuration, breakDuration, remaining, nudgesTriggered, effectiveTaskId]);
+
+  // Listen for cross-tab blocked app attempts and state syncs
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const bc = new BroadcastChannel(FOCUS_SYNC_CHANNEL);
+
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data;
+      if (!data || data.senderTabId === tabIdRef.current) return;
+
+      if (data.type === "BLOCKED_ATTEMPT" && !blockedQuery) {
+        // This is the original focus tab! Acknowledge so the newly opened restricted tab can close itself
+        bc.postMessage({
+          type: "ORIGINAL_TAB_ACK",
+          targetTabId: data.senderTabId,
+          originPath: window.location.pathname + window.location.search,
+          mode: "solo",
+          senderTabId: tabIdRef.current,
+        });
+
+        try {
+          window.focus();
+        } catch {}
+
+        if (running && phase === "study") {
+          setNudgesTriggered((n) => n + 1);
+          setNudgeReason("blocked");
+          setBlockedDomainAlert(data.domain || null);
+          setShowNudgeModal(true);
+          playAlertNudge();
+        }
+      } else if (data.type === "STATE_SYNC" && data.session?.mode === "solo") {
+        const s = data.session as ActiveFocusSessionState;
+        setStudyDuration(s.studyDuration);
+        setBreakDuration(s.breakDuration);
+        setPhase(s.phase);
+        setRunning(s.running);
+        endTimeRef.current = s.endTime;
+        if (s.running && s.endTime) {
+          setRemaining(Math.max(1, Math.ceil((s.endTime - Date.now()) / 1000)));
+        } else {
+          setRemaining(s.remainingSec);
+        }
+        setNudgesTriggered(s.nudgesTriggered || 0);
+      }
+    };
+
+    bc.addEventListener("message", onMessage);
+    return () => {
+      bc.removeEventListener("message", onMessage);
+      bc.close();
+    };
+  }, [blockedQuery, running, phase]);
+
+  // Handle when this page is opened via extension redirect (/focus?blocked=...)
+  useEffect(() => {
+    if (!blockedQuery) return;
+
+    const saved = getActiveFocusSession();
+    let bc: BroadcastChannel | null = null;
+    let ackReceived = false;
+
+    if (typeof BroadcastChannel !== "undefined") {
+      bc = new BroadcastChannel(FOCUS_SYNC_CHANNEL);
+      const handleAck = (e: MessageEvent) => {
+        const data = e.data;
+        if (data?.type === "ORIGINAL_TAB_ACK" && data.targetTabId === tabIdRef.current) {
+          ackReceived = true;
+          // Original timer tab is open! Close this redirected tab so user returns to the original tab
+          try {
+            window.close();
+          } catch {}
+
+          // Fallback if browser blocks window.close(): navigate this tab to the exact original session page
+          setTimeout(() => {
+            if (data.mode === "room" && data.roomId) {
+              navigate({
+                to: "/rooms/$roomId",
+                params: { roomId: String(data.roomId) },
+                replace: true,
+              });
+            } else {
+              navigate({
+                to: "/focus",
+                search: effectiveTaskId ? { taskId: effectiveTaskId } : {},
+                replace: true,
+              });
+            }
+          }, 80);
+        }
+      };
+      bc.addEventListener("message", handleAck);
+      bc.postMessage({
+        type: "BLOCKED_ATTEMPT",
+        domain: blockedQuery,
+        senderTabId: tabIdRef.current,
+      });
+    }
+
+    const fallbackTimer = setTimeout(() => {
+      if (ackReceived) return;
+
+      // Same-tab redirect (no other tab open): return to the exact active page where timer is in progress
+      if (saved?.mode === "room" && saved.roomId) {
+        navigate({
+          to: "/rooms/$roomId",
+          params: { roomId: saved.roomId },
+          search: { blocked: blockedQuery },
+          replace: true,
+        });
+        return;
+      }
+
+      // Restore in-progress solo timer on this page and trigger the blocked app nudge
+      if (saved?.mode === "solo" && saved.running) {
+        setNudgesTriggered((n) => n + 1);
+        setNudgeReason("blocked");
+        setBlockedDomainAlert(blockedQuery);
+        setShowNudgeModal(true);
+        playAlertNudge();
+      }
+
+      // Clean ?blocked= from the URL so it matches the original focus page
+      navigate({
+        to: "/focus",
+        search: effectiveTaskId ? { taskId: effectiveTaskId } : {},
+        replace: true,
+      });
+    }, 120);
+
+    return () => {
+      clearTimeout(fallbackTimer);
+      bc?.close();
+    };
+  }, [blockedQuery, effectiveTaskId, navigate]);
+
+  // Sync remaining when duration changes (only if stopped and no active countdown)
+  useEffect(() => {
+    if (!running && endTimeRef.current === null) {
       setRemaining(phase === "study" ? studyDuration * 60 : breakDuration * 60);
     }
   }, [studyDuration, breakDuration, phase, running]);
@@ -103,29 +312,38 @@ function FocusPage() {
   useEffect(() => {
     if (!running) return;
 
+    if (!endTimeRef.current) {
+      endTimeRef.current = Date.now() + remaining * 1000;
+    }
+
     const id = setInterval(() => {
-      setRemaining((r) => {
-        if (r <= 1) {
-          if (phase === "study") {
-            // Strict Study Block Fulfilled! Transition immediately to Break and unlock apps.
-            playBreakChime();
-            setPhase("break");
-            return breakDuration * 60;
-          } else {
-            // Break timer expired! Conclude session or prompt next cycle.
-            playStartChime();
-            setRunning(false);
-            setDone(true);
-            setPhase("study");
-            return studyDuration * 60;
-          }
+      const targetEnd = endTimeRef.current ?? Date.now() + remaining * 1000;
+      const secsLeft = Math.ceil((targetEnd - Date.now()) / 1000);
+
+      if (secsLeft <= 0) {
+        if (phase === "study") {
+          // Strict Study Block Fulfilled! Transition immediately to Break and unlock apps.
+          playBreakChime();
+          const nextSec = breakDuration * 60;
+          endTimeRef.current = Date.now() + nextSec * 1000;
+          setPhase("break");
+          setRemaining(nextSec);
+        } else {
+          // Break timer expired! Conclude session or prompt next cycle.
+          playStartChime();
+          endTimeRef.current = null;
+          setRunning(false);
+          setDone(true);
+          setPhase("study");
+          setRemaining(studyDuration * 60);
         }
-        return r - 1;
-      });
-    }, 1000);
+      } else {
+        setRemaining(secsLeft);
+      }
+    }, 500);
 
     return () => clearInterval(id);
-  }, [running, phase, studyDuration, breakDuration]);
+  }, [running, phase, studyDuration, breakDuration, remaining]);
 
   // Active Procrastination Nudge Detection (Only triggers during active study phase)
   useEffect(() => {
@@ -221,8 +439,15 @@ function FocusPage() {
     }
     if (!running) {
       playStartChime();
+      endTimeRef.current = Date.now() + remaining * 1000;
+      setRunning(true);
+    } else {
+      if (endTimeRef.current) {
+        setRemaining(Math.max(1, Math.ceil((endTimeRef.current - Date.now()) / 1000)));
+      }
+      endTimeRef.current = null;
+      setRunning(false);
     }
-    setRunning((r) => !r);
   };
 
   const handleSelectPreset = (p: RatioPreset) => {
@@ -230,11 +455,13 @@ function FocusPage() {
       navigate({ to: "/login" });
       return;
     }
+    endTimeRef.current = null;
     setStudyDuration(p.studyMin);
     setBreakDuration(p.breakMin);
     setPhase("study");
     setRunning(false);
     setRemaining(p.studyMin * 60);
+    clearActiveFocusSession("solo");
   };
 
   const handleReset = () => {
@@ -242,9 +469,11 @@ function FocusPage() {
       navigate({ to: "/login" });
       return;
     }
+    endTimeRef.current = null;
     setRunning(false);
     setPhase("study");
     setRemaining(studyDuration * 60);
+    clearActiveFocusSession("solo");
   };
 
   const handleBlockedDomainsChange = (newDomains: string[]) => {
@@ -277,12 +506,14 @@ function FocusPage() {
       ...(submitFeedback ? { rating, difficulty, feedback } : {}),
     });
     if (task) completeTask(task.id);
+    endTimeRef.current = null;
     setDone(false);
     setRunning(false);
     setPhase("study");
     setRemaining(studyDuration * 60);
     setFeedback("");
     setNudgesTriggered(0);
+    clearActiveFocusSession("solo");
   }
 
   const currentTotalDuration = phase === "study" ? studyDuration * 60 : breakDuration * 60;
@@ -301,6 +532,7 @@ function FocusPage() {
         isOpen={showNudgeModal}
         onDismiss={() => setShowNudgeModal(false)}
         reason={nudgeReason}
+        blockedDomain={blockedDomainAlert}
         timeRemainingFormatted={`${min}:${sec}`}
         blockedCount={blockedDomains.length}
         nudgeCount={nudgesTriggered}

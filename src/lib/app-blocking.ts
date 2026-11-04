@@ -30,6 +30,61 @@ export const DEFAULT_APPS: DistractionApp[] = [
 ];
 
 const BLOCKED_APPS_KEY = "lockin.blocked_apps.v2";
+const ACTIVE_SESSION_KEY = "lockin.active_focus_session.v1";
+export const FOCUS_SYNC_CHANNEL = "lockin_focus_sync_v1";
+
+export interface ActiveFocusSessionState {
+  mode: "solo" | "room";
+  originPath: string;
+  roomId?: string;
+  taskId?: string;
+  running: boolean;
+  phase: "study" | "break";
+  studyDuration: number;
+  breakDuration: number;
+  endTime: number | null;
+  remainingSec: number;
+  nudgesTriggered: number;
+  updatedAt: number;
+}
+
+export function getActiveFocusSession(): ActiveFocusSessionState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ActiveFocusSessionState;
+    // Ignore stale sessions older than 6 hours
+    if (Date.now() - (parsed.updatedAt || 0) > 6 * 60 * 60 * 1000) {
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function saveActiveFocusSession(session: ActiveFocusSessionState) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      ACTIVE_SESSION_KEY,
+      JSON.stringify({ ...session, updatedAt: Date.now() })
+    );
+  } catch {}
+}
+
+export function clearActiveFocusSession(mode?: "solo" | "room", roomId?: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const current = getActiveFocusSession();
+    if (!current) return;
+    if (mode && current.mode !== mode) return;
+    if (roomId && current.roomId !== roomId) return;
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+  } catch {}
+}
 
 export function getSavedBlockedDomains(): string[] {
   if (typeof window === "undefined") {
@@ -54,13 +109,14 @@ export function saveBlockedDomains(domains: string[]) {
 
 export function buildExtensionZip(blockedDomains: string[]): Blob {
   const domains = blockedDomains.length > 0 ? blockedDomains : ["instagram.com", "tiktok.com", "youtube.com"];
+  const appOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:5173";
 
   const manifest = {
     manifest_version: 3,
     name: "Lock-In Hard Distraction Shield",
-    version: "1.2.0",
+    version: "1.3.0",
     description: "Hard-blocks social media, video platforms, and mobile distraction sites during active focus sessions and study rooms.",
-    permissions: ["declarativeNetRequest", "storage", "alarms"],
+    permissions: ["declarativeNetRequest", "storage", "alarms", "tabs"],
     host_permissions: ["<all_urls>"],
     declarative_net_request: {
       rule_resources: [
@@ -85,7 +141,7 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
     action: {
       type: "redirect",
       redirect: {
-        url: `http://localhost:5173/focus?blocked=${encodeURIComponent(d)}`,
+        url: `${appOrigin}/focus?blocked=${encodeURIComponent(d)}`,
       },
     },
     condition: {
@@ -95,10 +151,67 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
   }));
 
   const backgroundJs = `// Lock-In Hard Distraction Shield - Background Service Worker
+const APP_ORIGIN = ${JSON.stringify(appOrigin)};
+let lastActiveLockInUrl = APP_ORIGIN + "/focus";
+
 console.log("[Lock-In Shield] Initialized with active rules for ${domains.length} blocked platforms.");
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[Lock-In Shield] Extension loaded. Focus protection armed.");
+});
+
+// Track the user's active Lock-In timer tab and return to it instead of opening a new tab/page
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  const currentUrl = changeInfo.url || tab.url;
+  if (!currentUrl) return;
+
+  // Remember the most recent active Lock-In focus or study room URL (excluding ?blocked= redirects)
+  if (
+    currentUrl.startsWith(APP_ORIGIN) &&
+    !currentUrl.includes("blocked=") &&
+    (currentUrl.includes("/focus") || currentUrl.includes("/rooms/"))
+  ) {
+    lastActiveLockInUrl = currentUrl;
+    return;
+  }
+
+  // If this tab was just redirected to /focus?blocked=...
+  if (currentUrl.startsWith(APP_ORIGIN) && currentUrl.includes("blocked=")) {
+    try {
+      const allTabs = await chrome.tabs.query({});
+      // Find an existing open tab where Lock-In (/focus or /rooms/) is already running
+      const existingTimerTab = allTabs.find(
+        (t) =>
+          t.id !== tabId &&
+          t.url &&
+          t.url.startsWith(APP_ORIGIN) &&
+          !t.url.includes("blocked=") &&
+          (t.url.includes("/focus") || t.url.includes("/rooms/"))
+      );
+
+      if (existingTimerTab && existingTimerTab.id != null) {
+        // Switch focus back to the original timer tab and close the restricted tab
+        if (existingTimerTab.windowId != null) {
+          await chrome.windows.update(existingTimerTab.windowId, { focused: true });
+        }
+        await chrome.tabs.update(existingTimerTab.id, { active: true });
+        await chrome.tabs.remove(tabId);
+      } else if (lastActiveLockInUrl && lastActiveLockInUrl !== currentUrl) {
+        // Same-tab navigation: restore the exact original page (e.g. /rooms/xyz or /focus)
+        const parsed = new URL(currentUrl);
+        const blockedDomain = parsed.searchParams.get("blocked");
+        const targetUrl = new URL(lastActiveLockInUrl);
+        if (blockedDomain) {
+          targetUrl.searchParams.set("blocked", blockedDomain);
+        }
+        if (targetUrl.toString() !== currentUrl) {
+          await chrome.tabs.update(tabId, { url: targetUrl.toString() });
+        }
+      }
+    } catch (err) {
+      console.warn("[Lock-In Shield] Tab handoff error:", err);
+    }
+  }
 });
 `;
 

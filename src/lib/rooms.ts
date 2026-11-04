@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { joinRoom } from "trystero/nostr";
+import { joinRoom, selfId } from "trystero/nostr";
 import {
   doc,
   getDoc,
@@ -9,6 +9,20 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
+
+export const TRYSTERO_APP_ID = "lockin-study-network-v2";
+
+export const NOSTR_RELAYS = [
+  "wss://nostr.mom",
+  "wss://nos.lol",
+  "wss://relay.damus.io",
+  "wss://relay.primal.net",
+];
+
+export function normalizeRoomId(id: string | undefined | null): string {
+  if (!id) return "";
+  return id.trim().toLowerCase();
+}
 
 export interface RoomMember {
   id: string;
@@ -136,7 +150,7 @@ export function saveMe(me: MeProfile) {
 }
 
 export function generateRoomId() {
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
+  return Math.random().toString(36).slice(2, 8).toLowerCase();
 }
 
 export async function createRoom(
@@ -144,7 +158,7 @@ export async function createRoom(
   authUser?: { id: string; name: string; email: string } | null
 ): Promise<Room> {
   const me = getMe(authUser);
-  const roomId = generateRoomId();
+  const roomId = normalizeRoomId(generateRoomId());
   const newRoom: Room = {
     id: roomId,
     name: name || "Focus Room",
@@ -193,11 +207,12 @@ export function listRooms(): Room[] {
 }
 
 export async function deleteRoom(id: string) {
+  const cleanId = normalizeRoomId(id);
   const rooms = loadLocalRooms();
-  delete rooms[id];
+  delete rooms[cleanId];
   saveLocalRooms(rooms);
   try {
-    deleteDoc(doc(db, "rooms", id)).catch(() => { });
+    deleteDoc(doc(db, "rooms", cleanId)).catch(() => { });
   } catch (err) {
     console.warn("Error deleting room in Firestore:", err);
   }
@@ -208,41 +223,42 @@ export async function ensureRoomFromLink(
   name?: string,
   authUser?: { id: string; name: string; email: string } | null
 ): Promise<Room> {
+  const cleanId = normalizeRoomId(id);
   const me = getMe(authUser);
   const local = loadLocalRooms();
 
   try {
     const snap: any = await Promise.race([
-      getDoc(doc(db, "rooms", id)),
+      getDoc(doc(db, "rooms", cleanId)),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 1500)),
     ]);
     if (snap && snap.exists()) {
       const data = snap.data() as Room;
-      local[id] = { ...data, members: local[id]?.members || [], messages: [] };
+      local[cleanId] = { ...data, id: cleanId, members: local[cleanId]?.members || [], messages: [] };
       saveLocalRooms(local);
-      return local[id];
+      return local[cleanId];
     }
   } catch (err) {
     console.warn("Firestore check room warning:", err);
   }
 
-  const placeholder: Room = local[id] || {
-    id,
-    name: name || `Focus Room #${id}`,
+  const placeholder: Room = local[cleanId] || {
+    id: cleanId,
+    name: name || `Focus Room #${cleanId}`,
     createdAt: new Date().toISOString(),
     creatorId: me.id,
     members: [],
     messages: [],
     timer: { running: false, durationMin: 25 },
   };
-  local[id] = placeholder;
+  local[cleanId] = placeholder;
   saveLocalRooms(local);
 
   Promise.race([
     setDoc(
-      doc(db, "rooms", id),
+      doc(db, "rooms", cleanId),
       {
-        id,
+        id: cleanId,
         name: placeholder.name,
         createdAt: placeholder.createdAt,
         creatorId: placeholder.creatorId,
@@ -256,25 +272,39 @@ export async function ensureRoomFromLink(
   return placeholder;
 }
 
+interface ActiveTrysteroSession {
+  roomId: string;
+  room: any;
+  refCount: number;
+  leaveTimer: any;
+  presenceAction: any;
+  timerAction: any;
+  chatAction: any;
+  patchAction: any;
+}
+
+let activeSession: ActiveTrysteroSession | null = null;
+
 export function useRoom(
   roomId: string | undefined,
   authUser?: { id: string; name: string; email: string } | null
 ) {
+  const cleanRoomId = normalizeRoomId(roomId);
   const me = getMe(authUser);
   const meRef = useRef<MeProfile>(me);
   useEffect(() => {
     meRef.current = me;
   }, [me]);
 
-  const [trysteroRoom, setTrysteroRoom] = useState<any>(null);
+  const [trysteroRoom, setTrysteroRoom] = useState<any>(() => activeSession?.roomId === cleanRoomId ? activeSession.room : null);
 
   // Timer & Room metadata
   const [roomData, setRoomData] = useState<{ id: string; name: string; timer: RoomTimer }>(() => {
-    if (!roomId) return { id: "room", name: "Focus Room", timer: { running: false, durationMin: 25 } };
-    const l = loadLocalRooms()[roomId];
+    if (!cleanRoomId) return { id: "room", name: "Focus Room", timer: { running: false, durationMin: 25 } };
+    const l = loadLocalRooms()[cleanRoomId];
     return {
-      id: roomId,
-      name: l?.name || `Focus Room #${roomId}`,
+      id: cleanRoomId,
+      name: l?.name || `Focus Room #${cleanRoomId}`,
       timer: l?.timer || { running: false, durationMin: 25 },
     };
   });
@@ -302,38 +332,74 @@ export function useRoom(
 
   // Dual-Transport P2P Mesh Network: High-Speed Nostr Relays + BroadcastChannel (Local)
   useEffect(() => {
-    if (!roomId || typeof window === "undefined") return;
+    if (!cleanRoomId || typeof window === "undefined") return;
 
     let isMounted = true;
-    let roomInstance: any = null;
-    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${roomId}`) : null;
+    const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
 
-    try {
-      roomInstance = joinRoom(
-        {
-          appId: "lockin-study-network-v2",
-          relayConfig: {
-            urls: [
-              "wss://relay.damus.io",
-              "wss://nos.lol",
-              "wss://nostr.mom",
-              "wss://relay.primal.net",
-              "wss://nostr.wine",
-            ],
-            warnOnRelayFailure: false,
+    if (activeSession && activeSession.roomId === cleanRoomId) {
+      if (activeSession.leaveTimer) {
+        clearTimeout(activeSession.leaveTimer);
+        activeSession.leaveTimer = null;
+      }
+      activeSession.refCount++;
+    } else {
+      if (activeSession) {
+        if (activeSession.leaveTimer) clearTimeout(activeSession.leaveTimer);
+        try {
+          activeSession.room.leave();
+        } catch {}
+        activeSession = null;
+      }
+
+      console.log("[LockIn Trystero] Initializing joinRoom with:", {
+        appId: TRYSTERO_APP_ID,
+        roomId: cleanRoomId,
+        password: "(none)",
+        relayUrls: NOSTR_RELAYS,
+        selfId,
+      });
+
+      let roomInstance: any = null;
+      try {
+        roomInstance = joinRoom(
+          {
+            appId: TRYSTERO_APP_ID,
+            relayConfig: {
+              urls: NOSTR_RELAYS,
+              warnOnRelayFailure: false,
+            },
           },
-        },
-        roomId
-      );
-      setTrysteroRoom(roomInstance);
-    } catch (err) {
-      console.warn("Trystero initialization error:", err);
+          cleanRoomId,
+          {
+            onJoinError: (err) => console.warn("[LockIn Trystero] Join error:", err),
+          }
+        );
+      } catch (err) {
+        console.warn("[LockIn Trystero] Initialization error:", err);
+      }
+
+      if (roomInstance) {
+        activeSession = {
+          roomId: cleanRoomId,
+          room: roomInstance,
+          refCount: 1,
+          leaveTimer: null,
+          presenceAction: roomInstance.makeAction("presence"),
+          timerAction: roomInstance.makeAction("timer"),
+          chatAction: roomInstance.makeAction("chat"),
+          patchAction: roomInstance.makeAction("patch"),
+        };
+      }
     }
 
-    const presenceAction = roomInstance?.makeAction("presence");
-    const timerAction = roomInstance?.makeAction("timer");
-    const chatAction = roomInstance?.makeAction("chat");
-    const patchAction = roomInstance?.makeAction("patch");
+    const currentRoom = activeSession?.room;
+    setTrysteroRoom(currentRoom);
+
+    const presenceAction = activeSession?.presenceAction;
+    const timerAction = activeSession?.timerAction;
+    const chatAction = activeSession?.chatAction;
+    const patchAction = activeSession?.patchAction;
 
     const getMyMember = (): RoomMember => {
       const currentMe = meRef.current;
@@ -350,14 +416,17 @@ export function useRoom(
       };
     };
 
-    // 1. Trystero Internet Mesh Peer Events
-    if (roomInstance) {
-      roomInstance.onPeerJoin = (peerId: string) => {
+    if (currentRoom) {
+      currentRoom.onPeerJoin = (peerId: string) => {
+        console.log(`[LockIn Trystero] onPeerJoin fired! Remote peer joined: ${peerId} (room: ${cleanRoomId})`);
         if (!isMounted) return;
-        presenceAction.send(getMyMember(), peerId);
+        const myMember = getMyMember();
+        presenceAction?.send(myMember, { target: peerId });
+        presenceAction?.send(myMember);
       };
 
-      roomInstance.onPeerLeave = (peerId: string) => {
+      currentRoom.onPeerLeave = (peerId: string) => {
+        console.log(`[LockIn Trystero] onPeerLeave fired! Remote peer left: ${peerId} (room: ${cleanRoomId})`);
         if (!isMounted) return;
         setActiveMembersMap((prev) => {
           const next: Record<string, RoomMember> = {};
@@ -370,53 +439,67 @@ export function useRoom(
         });
       };
 
-      presenceAction.onMessage = (peerMember: RoomMember, peerId: string) => {
-        if (!isMounted || !peerMember || peerMember.id === me.id) return;
-        setActiveMembersMap((prev) => ({
-          ...prev,
-          [peerMember.id]: {
-            ...peerMember,
-            peerId,
-            lastSeen: String(Date.now()),
-          },
-        }));
-        presenceAction.send(getMyMember(), peerId);
-      };
-
-      timerAction.onMessage = (timer: RoomTimer) => {
-        if (!isMounted || !timer) return;
-        setRoomData((prev) => ({ ...prev, timer }));
-      };
-
-      chatAction.onMessage = (msg: RoomMessage) => {
-        if (!isMounted || !msg) return;
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
-      };
-
-      patchAction.onMessage = (data: { memberId: string; patch: Partial<RoomMember> }) => {
-        if (!isMounted || !data?.memberId) return;
-        setActiveMembersMap((prev) => {
-          if (!prev[data.memberId]) return prev;
-          return {
+      if (presenceAction) {
+        presenceAction.onMessage = (peerMember: RoomMember, context: any) => {
+          const senderPeerId = typeof context === "string" ? context : context?.peerId;
+          console.log(`[LockIn Trystero] presenceAction received:`, peerMember?.name, `peerId:`, senderPeerId);
+          if (!isMounted || !peerMember || peerMember.id === meRef.current.id) return;
+          setActiveMembersMap((prev) => ({
             ...prev,
-            [data.memberId]: {
-              ...prev[data.memberId],
-              ...data.patch,
+            [peerMember.id]: {
+              ...peerMember,
+              peerId: senderPeerId,
               lastSeen: String(Date.now()),
             },
-          };
-        });
-      };
+          }));
+          if (senderPeerId) {
+            presenceAction.send(getMyMember(), { target: senderPeerId });
+          }
+        };
+      }
+
+      if (timerAction) {
+        timerAction.onMessage = (timer: RoomTimer) => {
+          console.log(`[LockIn Trystero] timerAction received:`, timer);
+          if (!isMounted || !timer) return;
+          setRoomData((prev) => ({ ...prev, timer }));
+        };
+      }
+
+      if (chatAction) {
+        chatAction.onMessage = (msg: RoomMessage) => {
+          console.log(`[LockIn Trystero] chatAction received:`, msg);
+          if (!isMounted || !msg) return;
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
+        };
+      }
+
+      if (patchAction) {
+        patchAction.onMessage = (data: { memberId: string; patch: Partial<RoomMember> }) => {
+          if (!isMounted || !data?.memberId) return;
+          setActiveMembersMap((prev) => {
+            if (!prev[data.memberId]) return prev;
+            return {
+              ...prev,
+              [data.memberId]: {
+                ...prev[data.memberId],
+                ...data.patch,
+                lastSeen: String(Date.now()),
+              },
+            };
+          });
+        };
+      }
     }
 
     // 2. BroadcastChannel Local Mesh Events (Instant 0ms inter-tab)
     const handleBcMessage = (e: MessageEvent) => {
       if (!isMounted || !e.data) return;
       const data = e.data;
-      if (data.type === "PRESENCE" && data.member && data.member.id !== me.id) {
+      if (data.type === "PRESENCE" && data.member && data.member.id !== meRef.current.id) {
         setActiveMembersMap((prev) => ({
           ...prev,
           [data.member.id]: { ...data.member, lastSeen: String(Date.now()) },
@@ -439,7 +522,7 @@ export function useRoom(
             [data.memberId]: { ...prev[data.memberId], ...data.patch, lastSeen: String(Date.now()) },
           };
         });
-      } else if (data.type === "LEAVE" && data.memberId && data.memberId !== me.id) {
+      } else if (data.type === "LEAVE" && data.memberId && data.memberId !== meRef.current.id) {
         setActiveMembersMap((prev) => {
           const next = { ...prev };
           delete next[data.memberId];
@@ -451,8 +534,9 @@ export function useRoom(
     bc?.addEventListener("message", handleBcMessage);
 
     // Initial announcement across both transports
-    presenceAction?.send(getMyMember());
-    bc?.postMessage({ type: "PRESENCE", member: getMyMember(), isPing: true });
+    const initialMe = getMyMember();
+    presenceAction?.send(initialMe);
+    bc?.postMessage({ type: "PRESENCE", member: initialMe, isPing: true });
 
     // Periodic heartbeat every 3 seconds
     const heartbeat = setInterval(() => {
@@ -464,19 +548,30 @@ export function useRoom(
     return () => {
       isMounted = false;
       clearInterval(heartbeat);
-      bc?.postMessage({ type: "LEAVE", memberId: me.id });
+      bc?.postMessage({ type: "LEAVE", memberId: meRef.current.id });
       bc?.removeEventListener("message", handleBcMessage);
       bc?.close();
-      try {
-        roomInstance?.leave();
-      } catch { }
-      setTrysteroRoom(null);
+
+      if (activeSession && activeSession.roomId === cleanRoomId) {
+        activeSession.refCount--;
+        if (activeSession.refCount <= 0) {
+          activeSession.leaveTimer = setTimeout(() => {
+            if (activeSession && activeSession.refCount <= 0) {
+              console.log(`[LockIn Trystero] Calling room.leave() for room ${cleanRoomId}`);
+              try {
+                activeSession.room.leave();
+              } catch {}
+              activeSession = null;
+            }
+          }, 400);
+        }
+      }
     };
-  }, [roomId, me.id]);
+  }, [cleanRoomId]);
 
   // Combined room object
   const room: Room = {
-    id: roomId || "room",
+    id: cleanRoomId || "room",
     name: roomData.name,
     createdAt: new Date().toISOString(),
     creatorId: me.id,
@@ -487,7 +582,7 @@ export function useRoom(
 
   const startTimer = useCallback(
     (durationMin: number, breakDurationMin: number = 5, phase: RoomTimerPhase = "study") => {
-      if (!roomId) return;
+      if (!cleanRoomId) return;
       const timer: RoomTimer = {
         running: true,
         startedAt: new Date().toISOString(),
@@ -500,41 +595,51 @@ export function useRoom(
 
       // Broadcast to all peers over WebRTC data channels
       try {
-        if (trysteroRoom) {
-          const timerAction = trysteroRoom.makeAction("timer");
-          timerAction.send(timer);
+        if (activeSession?.timerAction) {
+          activeSession.timerAction.send(timer);
         }
       } catch (e) {
         console.warn("Timer broadcast warning:", e);
       }
 
+      try {
+        const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+        bc?.postMessage({ type: "TIMER", timer });
+        bc?.close();
+      } catch {}
+
       // Archival write to Firestore (if available)
-      setDoc(doc(db, "rooms", roomId), { timer }, { merge: true }).catch(() => { });
+      setDoc(doc(db, "rooms", cleanRoomId), { timer }, { merge: true }).catch(() => { });
     },
-    [roomId, trysteroRoom]
+    [cleanRoomId]
   );
 
   const stopTimer = useCallback(() => {
-    if (!roomId) return;
+    if (!cleanRoomId) return;
     const timer: RoomTimer = { running: false, durationMin: 25, breakDurationMin: 5, phase: "study" };
 
     setRoomData((prev) => ({ ...prev, timer }));
 
     try {
-      if (trysteroRoom) {
-        const timerAction = trysteroRoom.makeAction("timer");
-        timerAction.send(timer);
+      if (activeSession?.timerAction) {
+        activeSession.timerAction.send(timer);
       }
     } catch (e) {
       console.warn("Timer stop warning:", e);
     }
 
-    setDoc(doc(db, "rooms", roomId), { timer }, { merge: true }).catch(() => { });
-  }, [roomId, trysteroRoom]);
+    try {
+      const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+      bc?.postMessage({ type: "TIMER", timer });
+      bc?.close();
+    } catch {}
+
+    setDoc(doc(db, "rooms", cleanRoomId), { timer }, { merge: true }).catch(() => { });
+  }, [cleanRoomId]);
 
   const sendMessage = useCallback(
     (text: string) => {
-      if (!roomId || !text.trim()) return;
+      if (!cleanRoomId || !text.trim()) return;
       const currentMe = meRef.current;
       const newMsg: RoomMessage = {
         id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -551,22 +656,27 @@ export function useRoom(
       });
 
       try {
-        if (trysteroRoom) {
-          const chatAction = trysteroRoom.makeAction("chat");
-          chatAction.send(newMsg);
+        if (activeSession?.chatAction) {
+          activeSession.chatAction.send(newMsg);
         }
       } catch (e) {
         console.warn("Chat broadcast warning:", e);
       }
 
-      addDoc(collection(db, "rooms", roomId, "messages"), newMsg).catch(() => { });
+      try {
+        const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+        bc?.postMessage({ type: "CHAT", message: newMsg });
+        bc?.close();
+      } catch {}
+
+      addDoc(collection(db, "rooms", cleanRoomId, "messages"), newMsg).catch(() => { });
     },
-    [roomId, trysteroRoom]
+    [cleanRoomId]
   );
 
   const setGoal = useCallback(
     (goal: string) => {
-      if (!roomId) return;
+      if (!cleanRoomId) return;
       setActiveMembersMap((prev) => {
         const current = prev[me.id];
         const updated = {
@@ -583,22 +693,21 @@ export function useRoom(
         };
 
         try {
-          if (trysteroRoom) {
-            const patchAction = trysteroRoom.makeAction("patch");
-            patchAction.send({ memberId: me.id, patch: { goal } });
+          if (activeSession?.patchAction) {
+            activeSession.patchAction.send({ memberId: me.id, patch: { goal } });
           }
         } catch { }
 
-        setDoc(doc(db, "rooms", roomId, "participants", me.id), { goal, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+        setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { goal, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
         return { ...prev, [me.id]: updated };
       });
     },
-    [roomId, me.id, me.name, me.emoji, trysteroRoom]
+    [cleanRoomId, me.id, me.name, me.emoji]
   );
 
   const toggleMic = useCallback(() => {
-    if (!roomId) return;
+    if (!cleanRoomId) return;
     setActiveMembersMap((prev) => {
       const current = prev[me.id];
       const nextMic = !(current?.micOn ?? true);
@@ -616,20 +725,19 @@ export function useRoom(
       };
 
       try {
-        if (trysteroRoom) {
-          const patchAction = trysteroRoom.makeAction("patch");
-          patchAction.send({ memberId: me.id, patch: { micOn: nextMic } });
+        if (activeSession?.patchAction) {
+          activeSession.patchAction.send({ memberId: me.id, patch: { micOn: nextMic } });
         }
       } catch { }
 
-      setDoc(doc(db, "rooms", roomId, "participants", me.id), { micOn: nextMic, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+      setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { micOn: nextMic, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
       return { ...prev, [me.id]: updated };
     });
-  }, [roomId, me.id, me.name, me.emoji, trysteroRoom]);
+  }, [cleanRoomId, me.id, me.name, me.emoji]);
 
   const toggleCamera = useCallback(() => {
-    if (!roomId) return;
+    if (!cleanRoomId) return;
     setActiveMembersMap((prev) => {
       const current = prev[me.id];
       const nextCam = !(current?.cameraOn ?? false);
@@ -647,21 +755,20 @@ export function useRoom(
       };
 
       try {
-        if (trysteroRoom) {
-          const patchAction = trysteroRoom.makeAction("patch");
-          patchAction.send({ memberId: me.id, patch: { cameraOn: nextCam } });
+        if (activeSession?.patchAction) {
+          activeSession.patchAction.send({ memberId: me.id, patch: { cameraOn: nextCam } });
         }
       } catch { }
 
-      setDoc(doc(db, "rooms", roomId, "participants", me.id), { cameraOn: nextCam, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+      setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { cameraOn: nextCam, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
       return { ...prev, [me.id]: updated };
     });
-  }, [roomId, me.id, me.name, me.emoji, trysteroRoom]);
+  }, [cleanRoomId, me.id, me.name, me.emoji]);
 
   const updateProfile = useCallback(
     (name: string, emoji?: string) => {
-      if (!roomId) return;
+      if (!cleanRoomId) return;
       const newEmoji = emoji || me.emoji;
       setActiveMembersMap((prev) => {
         const current = prev[me.id];
@@ -679,13 +786,12 @@ export function useRoom(
         };
 
         try {
-          if (trysteroRoom) {
-            const patchAction = trysteroRoom.makeAction("patch");
-            patchAction.send({ memberId: me.id, patch: { name, emoji: newEmoji } });
+          if (activeSession?.patchAction) {
+            activeSession.patchAction.send({ memberId: me.id, patch: { name, emoji: newEmoji } });
           }
         } catch { }
 
-        setDoc(doc(db, "rooms", roomId, "participants", me.id), { name, emoji: newEmoji, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+        setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { name, emoji: newEmoji, lastSeen: Date.now() }, { merge: true }).catch(() => { });
 
         return { ...prev, [me.id]: updated };
       });
@@ -696,16 +802,22 @@ export function useRoom(
         localStorage.setItem("lockin.guest_name", name);
       }
     },
-    [roomId, me, trysteroRoom]
+    [cleanRoomId, me]
   );
 
   const leave = useCallback(() => {
-    if (!roomId) return;
-    try {
-      trysteroRoom?.leave();
-    } catch { }
-    deleteDoc(doc(db, "rooms", roomId, "participants", me.id)).catch(() => { });
-  }, [roomId, me.id, trysteroRoom]);
+    if (!cleanRoomId) return;
+    if (activeSession && activeSession.roomId === cleanRoomId) {
+      if (activeSession.leaveTimer) clearTimeout(activeSession.leaveTimer);
+      try {
+        console.log(`[LockIn Trystero] Explicit leave called for room ${cleanRoomId}`);
+        activeSession.room.leave();
+      } catch {}
+      activeSession = null;
+    }
+    deleteDoc(doc(db, "rooms", cleanRoomId, "participants", me.id)).catch(() => { });
+    setTrysteroRoom(null);
+  }, [cleanRoomId, me.id]);
 
   return {
     room,

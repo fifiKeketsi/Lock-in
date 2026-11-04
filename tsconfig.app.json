@@ -1,11 +1,10 @@
 {
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "target": "es2023",
-    "lib": ["ES2023", "DOM"],
-    "module": "esnext",
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
     "types": ["vite/client"],
-    "allowArbitraryExtensions": true,
     "skipLibCheck": true,
 
     /* Bundler mode */
@@ -17,9 +16,9 @@
     "jsx": "react-jsx",
 
     /* Linting */
+    "strictNullChecks": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
       "@/*": ["./src/*"]

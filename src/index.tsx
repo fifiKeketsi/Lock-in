@@ -25,7 +25,7 @@ const QUOTES = [
   "The secret of getting ahead is getting started.",
 ];
 
-function Home() {
+function Home(): React.JSX.Element | null {
   const { state } = useLockIn();
   const quote = QUOTES[new Date().getDay() % QUOTES.length];
   const completedToday = state.tasks.filter(

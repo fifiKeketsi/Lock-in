@@ -197,7 +197,7 @@ export function TaskBoard() {
                   <div className="flex items-center gap-2 ml-4 shrink-0">
                     <Link
                       to="/focus"
-                      search={{ taskId: t.id } as any}
+                      search={{ taskId: t.id }}
                       className="sfb-btn-primary inline-flex items-center gap-1.5 text-xs py-1 px-3"
                     >
                       <Clock className="size-3" />

@@ -14,7 +14,7 @@ export const Route = createFileRoute("/register")({
   component: RegisterPage,
 });
 
-function RegisterPage() {
+function RegisterPage(): React.JSX.Element | null {
   const { register, state } = useLockIn();
   const navigate = useNavigate();
   const [name, setName] = useState("");

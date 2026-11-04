@@ -5,7 +5,8 @@ import { playAlertNudge } from "@/lib/sound";
 interface ProcrastinationNudgeModalProps {
   isOpen: boolean;
   onDismiss: () => void;
-  reason: "blur" | "motion" | "mouse" | "exit";
+  reason: "blur" | "motion" | "mouse" | "exit" | "blocked";
+  blockedDomain?: string | null;
   timeRemainingFormatted: string;
   blockedCount: number;
   nudgeCount: number;
@@ -23,6 +24,7 @@ export function ProcrastinationNudgeModal({
   isOpen,
   onDismiss,
   reason,
+  blockedDomain,
   timeRemainingFormatted,
   blockedCount,
   nudgeCount,
@@ -43,7 +45,9 @@ export function ProcrastinationNudgeModal({
   const quote = NUDGE_QUOTES[(nudgeCount - 1) % NUDGE_QUOTES.length] || NUDGE_QUOTES[0];
 
   const reasonText =
-    reason === "motion"
+    reason === "blocked"
+      ? `Restricted app blocked${blockedDomain ? ` (${blockedDomain})` : ""}! Returned you to your active focus timer.`
+      : reason === "motion"
       ? "Physical phone pickup detected! Device was lifted during active focus."
       : reason === "mouse"
       ? "Attempted to leave focus screen towards other apps or browser tabs."

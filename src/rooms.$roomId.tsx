@@ -1,8 +1,8 @@
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { VideoRoom } from "@/components/VideoRoom";
-import { ensureRoomFromLink, useRoom, type RoomTimerPhase } from "@/lib/rooms";
+import { ensureRoomFromLink, useRoom, normalizeRoomId, type RoomTimerPhase } from "@/lib/rooms";
 import { useLockIn } from "@/lib/store";
 import {
   Copy,
@@ -27,10 +27,16 @@ import {
   getSavedBlockedDomains,
   saveBlockedDomains,
   buildExtensionZip,
+  saveActiveFocusSession,
+  clearActiveFocusSession,
+  FOCUS_SYNC_CHANNEL,
 } from "@/lib/app-blocking";
 import { playAlertNudge, playBreakChime, playStartChime } from "@/lib/sound";
 
 export const Route = createFileRoute("/rooms/$roomId")({
+  validateSearch: (search: Record<string, unknown>): { blocked?: string } => ({
+    blocked: typeof search.blocked === "string" ? search.blocked : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Focus Room · Lock-In" },
@@ -40,10 +46,20 @@ export const Route = createFileRoute("/rooms/$roomId")({
   component: RoomPage,
 });
 
-export function RoomPage() {
-  const { roomId } = useParams({ from: "/rooms/$roomId" });
+export function RoomPage(): React.JSX.Element | null {
+  const { roomId: rawRoomId } = useParams({ from: "/rooms/$roomId" });
+  const { blocked: blockedQuery } = Route.useSearch();
+  const navigate = useNavigate();
+  const roomId = normalizeRoomId(rawRoomId);
+  console.log('[LockIn] RoomPage rawRoomId:', rawRoomId, 'normalized:', roomId);
   const { state } = useLockIn();
   const [copied, setCopied] = useState(false);
+
+  const tabIdRef = useRef<string>(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `room_tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  );
 
   useEffect(() => {
     if (roomId) {
@@ -85,7 +101,8 @@ export function RoomPage() {
 
   // Procrastination Nudge State
   const [showNudgeModal, setShowNudgeModal] = useState(false);
-  const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit">("blur");
+  const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit" | "blocked">("blur");
+  const [blockedDomainAlert, setBlockedDomainAlert] = useState<string | null>(null);
   const [nudgeCount, setNudgeCount] = useState(0);
   const hasTriggeredNudge = useRef(false);
 
@@ -126,6 +143,92 @@ export function RoomPage() {
 
   const currentPhase: RoomTimerPhase = room?.timer.phase || "study";
   const isRoomHardBlockActive = Boolean(room?.timer.running && currentPhase === "study");
+
+  // Persist active room focus session so restricted app redirects always return to this study room
+  useEffect(() => {
+    if (!roomId) return;
+    if (room?.timer.running && room.timer.startedAt) {
+      const endTime = new Date(room.timer.startedAt).getTime() + room.timer.durationMin * 60_000;
+      saveActiveFocusSession({
+        mode: "room",
+        originPath: `/rooms/${roomId}`,
+        roomId,
+        running: true,
+        phase: currentPhase,
+        studyDuration: room.timer.durationMin,
+        breakDuration: room.timer.breakDurationMin || 5,
+        endTime,
+        remainingSec: Math.max(0, Math.ceil((endTime - Date.now()) / 1000)),
+        nudgesTriggered: nudgeCount,
+        updatedAt: Date.now(),
+      });
+    } else {
+      clearActiveFocusSession("room", roomId);
+    }
+  }, [roomId, room?.timer, currentPhase, nudgeCount]);
+
+  // Listen for restricted app opens from other tabs and acknowledge so the new tab closes and returns here
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const bc = new BroadcastChannel(FOCUS_SYNC_CHANNEL);
+
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data;
+      if (!data || data.senderTabId === tabIdRef.current) return;
+
+      if (data.type === "BLOCKED_ATTEMPT") {
+        bc.postMessage({
+          type: "ORIGINAL_TAB_ACK",
+          targetTabId: data.senderTabId,
+          originPath: `/rooms/${roomId}`,
+          mode: "room",
+          roomId,
+          senderTabId: tabIdRef.current,
+        });
+
+        try {
+          window.focus();
+        } catch {}
+
+        if (isRoomHardBlockActive) {
+          setNudgeCount((c) => c + 1);
+          setNudgeReason("blocked");
+          setBlockedDomainAlert(data.domain || null);
+          setShowNudgeModal(true);
+          playAlertNudge();
+          sendMessage(
+            `⚠️ [Shield] Blocked attempt to open ${data.domain || "restricted app"} during Deep Work! Returned to focus room.`
+          );
+        }
+      }
+    };
+
+    bc.addEventListener("message", onMessage);
+    return () => {
+      bc.removeEventListener("message", onMessage);
+      bc.close();
+    };
+  }, [roomId, isRoomHardBlockActive, sendMessage]);
+
+  // Handle same-tab redirect back to /rooms/$roomId?blocked=...
+  useEffect(() => {
+    if (!blockedQuery) return;
+    if (isRoomHardBlockActive) {
+      setNudgeCount((c) => c + 1);
+      setNudgeReason("blocked");
+      setBlockedDomainAlert(blockedQuery);
+      setShowNudgeModal(true);
+      playAlertNudge();
+      sendMessage(
+        `⚠️ [Shield] Blocked attempt to open ${blockedQuery} during Deep Work! Returned to focus room.`
+      );
+    }
+    navigate({
+      to: "/rooms/$roomId",
+      params: { roomId },
+      replace: true,
+    });
+  }, [blockedQuery, isRoomHardBlockActive, navigate, roomId, sendMessage]);
 
   // Handle phase transitions when timer reaches 0
   const prevRemainingRef = useRef<number | null>(null);
@@ -313,6 +416,7 @@ export function RoomPage() {
         isOpen={showNudgeModal}
         onDismiss={() => setShowNudgeModal(false)}
         reason={nudgeReason}
+        blockedDomain={blockedDomainAlert}
         timeRemainingFormatted={`${mm}:${ss}`}
         blockedCount={blockedDomains.length}
         nudgeCount={nudgeCount}
@@ -323,7 +427,10 @@ export function RoomPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Link
             to="/rooms"
-            onClick={leave}
+            onClick={() => {
+              clearActiveFocusSession("room", roomId);
+              leave();
+            }}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="size-3.5" /> Leave Room
