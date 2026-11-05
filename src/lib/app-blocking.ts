@@ -68,6 +68,8 @@ export function getActiveFocusSession(): ActiveFocusSessionState | null {
 export function isFocusSessionActive(session: ActiveFocusSessionState | null = getActiveFocusSession()): boolean {
   if (!session || !session.running || session.phase !== "study") return false;
   if (session.endTime && session.endTime <= Date.now()) return false;
+  // Ignore sessions that haven't been updated recently
+  if (Date.now() - (session.updatedAt || 0) > 15_000) return false;
   return true;
 }
 
@@ -77,13 +79,15 @@ export function syncShieldExtension(
 ) {
   if (typeof window === "undefined") return;
   try {
-    const isActive = isFocusSessionActive(session);
+    const path = window.location.pathname;
+    const isFocusOrRoomRoute = path === "/focus" || path.startsWith("/rooms/");
+    const isActive = isFocusOrRoomRoute && isFocusSessionActive(session);
     window.postMessage(
       {
         source: "LOCKIN_WEB_APP",
         type: "LOCKIN_SHIELD_SYNC",
         isActive,
-        session,
+        session: isActive ? session : null,
         blockedDomains,
         appOrigin: window.location.origin,
       },
@@ -145,7 +149,7 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
   const manifest = {
     manifest_version: 3,
     name: "Lock-In Hard Distraction Shield",
-    version: "2.0.0",
+    version: "2.1.0",
     description: "Dynamically blocks selected distraction sites ONLY during active Lock-In study sessions and unlocks automatically on breaks or when idle.",
     permissions: ["declarativeNetRequest", "storage", "alarms", "tabs"],
     host_permissions: ["<all_urls>"],
@@ -164,41 +168,49 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
     },
   };
 
-  const contentJs = `// Lock-In Hard Distraction Shield - Content Script Bridge
+  const contentJs = `// Lock-In Hard Distraction Shield - Content Script Bridge (v2.1)
 (function () {
   const DEFAULT_ORIGIN = ${JSON.stringify(appOrigin)};
   const SESSION_KEY = "lockin.active_focus_session.v1";
   const BLOCKED_KEY = "lockin.blocked_apps.v2";
+  let isConfirmedLockInPage = window.location.origin === DEFAULT_ORIGIN;
 
-  function isLockInAppPage() {
-    if (window.location.origin === DEFAULT_ORIGIN) return true;
+  function markInstalled() {
     try {
-      return (
-        localStorage.getItem(SESSION_KEY) !== null ||
-        localStorage.getItem(BLOCKED_KEY) !== null
-      );
-    } catch (e) {
-      return false;
-    }
+      if (document.documentElement) {
+        document.documentElement.dataset.lockinShieldInstalled = "2.1.0";
+      }
+    } catch (e) {}
   }
 
-  if (!isLockInAppPage()) return;
+  if (isConfirmedLockInPage) {
+    markInstalled();
+  }
 
-  try {
-    document.documentElement.dataset.lockinShieldInstalled = "2.0.0";
-  } catch (e) {}
+  function isFocusOrRoomPath() {
+    const p = window.location.pathname || "";
+    return p === "/focus" || p.startsWith("/rooms/");
+  }
 
   function readAndSyncState() {
     try {
       const rawSession = localStorage.getItem(SESSION_KEY);
       const rawBlocked = localStorage.getItem(BLOCKED_KEY);
+      if (rawSession !== null || rawBlocked !== null) {
+        isConfirmedLockInPage = true;
+      }
+      if (!isConfirmedLockInPage) return;
+
+      markInstalled();
+
       const session = rawSession ? JSON.parse(rawSession) : null;
       const blockedDomains = rawBlocked ? JSON.parse(rawBlocked) : ${JSON.stringify(domains)};
 
       const now = Date.now();
-      const isFresh = session && now - (session.updatedAt || 0) < 6 * 60 * 60 * 1000;
+      const isFresh = session && now - (session.updatedAt || 0) < 15000;
       const notExpired = session && (!session.endTime || session.endTime > now);
       const isActive = Boolean(
+        isFocusOrRoomPath() &&
         isFresh &&
         notExpired &&
         session.running === true &&
@@ -215,18 +227,33 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
     } catch (e) {}
   }
 
-  // Listen for instant state updates posted by the Lock-In React app
+  // Always listen for instant state updates posted by the Lock-In React app
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== "LOCKIN_WEB_APP" || data.type !== "LOCKIN_SHIELD_SYNC") return;
 
+    isConfirmedLockInPage = true;
+    markInstalled();
+
+    const activeOnRoute = Boolean(data.isActive && isFocusOrRoomPath());
+
     chrome.runtime.sendMessage({
       type: "LOCKIN_SYNC_STATE",
-      isActive: Boolean(data.isActive),
-      session: data.session || null,
+      isActive: activeOnRoute,
+      session: activeOnRoute ? data.session : null,
       blockedDomains: Array.isArray(data.blockedDomains) ? data.blockedDomains : ${JSON.stringify(domains)},
       appOrigin: data.appOrigin || window.location.origin,
+    }).catch(() => {});
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (!isConfirmedLockInPage) return;
+    chrome.runtime.sendMessage({
+      type: "LOCKIN_SYNC_STATE",
+      isActive: false,
+      session: null,
+      appOrigin: window.location.origin,
     }).catch(() => {});
   });
 
@@ -234,16 +261,16 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
   window.addEventListener("focus", readAndSyncState);
   document.addEventListener("DOMContentLoaded", readAndSyncState);
 
-  // Sync immediately and poll every 1.5s while Lock-In tab is open
   readAndSyncState();
   setInterval(readAndSyncState, 1500);
 })();
 `;
 
-  const backgroundJs = `// Lock-In Hard Distraction Shield - Dynamic Background Service Worker (v2.0)
+  const backgroundJs = `// Lock-In Hard Distraction Shield - Dynamic Background Service Worker (v2.1)
 const DEFAULT_APP_ORIGIN = ${JSON.stringify(appOrigin)};
 const DEFAULT_DOMAINS = ${JSON.stringify(domains)};
 const ALARM_NAME = "lockin_study_phase_end";
+const HEARTBEAT_ALARM = "lockin_heartbeat_check";
 
 let shieldState = {
   isActive: false,
@@ -251,6 +278,7 @@ let shieldState = {
   appOrigin: DEFAULT_APP_ORIGIN,
   originPath: "/focus",
   endTime: null,
+  lastActiveSync: 0,
 };
 
 async function loadState() {
@@ -298,7 +326,17 @@ async function applyDynamicRules(state) {
     }
 
     const origin = state.appOrigin || DEFAULT_APP_ORIGIN;
-    const addRules = state.blockedDomains.map((domain, idx) => ({
+    let appHost = "localhost";
+    try {
+      appHost = new URL(origin).hostname;
+    } catch (e) {}
+
+    const excludedDomains = Array.from(new Set([appHost, "localhost", "127.0.0.1"]));
+    const cleanDomains = state.blockedDomains.filter(
+      (d) => d && !excludedDomains.includes(d.toLowerCase())
+    );
+
+    const addRules = cleanDomains.map((domain, idx) => ({
       id: idx + 1,
       priority: 1,
       action: {
@@ -310,6 +348,7 @@ async function applyDynamicRules(state) {
       condition: {
         urlFilter: "||" + domain,
         resourceTypes: ["main_frame"],
+        excludedRequestDomains: excludedDomains,
       },
     }));
 
@@ -332,30 +371,62 @@ async function applyDynamicRules(state) {
   }
 }
 
+async function verifyOpenTimerTabs() {
+  try {
+    await loadState();
+    if (!shieldState.isActive) return;
+    const allTabs = await chrome.tabs.query({});
+    const origin = shieldState.appOrigin || DEFAULT_APP_ORIGIN;
+    const hasActiveFocusOrRoomTab = allTabs.some((t) => {
+      if (!t.url || !t.url.startsWith(origin)) return false;
+      try {
+        const u = new URL(t.url);
+        return (
+          !u.searchParams.has("blocked") &&
+          (u.pathname === "/focus" || u.pathname.startsWith("/rooms/"))
+        );
+      } catch (e) {
+        return false;
+      }
+    });
+
+    if (!hasActiveFocusOrRoomTab) {
+      await saveState({ isActive: false, endTime: null });
+      await applyDynamicRules(shieldState);
+    }
+  } catch (e) {}
+}
+
 // Start in unlocked standby state on install/startup until an active focus timer arms it
 chrome.runtime.onInstalled.addListener(async () => {
-  await saveState({ isActive: false, endTime: null });
+  await saveState({ isActive: false, endTime: null, lastActiveSync: 0 });
   await applyDynamicRules(shieldState);
+  await chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  await loadState();
+  await saveState({ isActive: false, endTime: null, lastActiveSync: 0 });
   await applyDynamicRules(shieldState);
 });
+
+// Immediately ensure rules match current state when worker wakes up
+loadState().then((s) => applyDynamicRules(s));
 
 // Receive real-time state syncs from the Lock-In web app content script
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === "LOCKIN_SYNC_STATE") {
     const session = message.session;
+    const isActive = Boolean(message.isActive);
     const nextState = {
-      isActive: Boolean(message.isActive),
+      isActive,
       blockedDomains:
         Array.isArray(message.blockedDomains) && message.blockedDomains.length > 0
           ? message.blockedDomains
           : shieldState.blockedDomains,
       appOrigin: message.appOrigin || shieldState.appOrigin || DEFAULT_APP_ORIGIN,
       originPath: (session && session.originPath) || "/focus",
-      endTime: (session && session.endTime) || null,
+      endTime: isActive && session ? session.endTime || null : null,
+      lastActiveSync: isActive ? Date.now() : 0,
     };
     saveState(nextState).then(() => applyDynamicRules(nextState));
     sendResponse({ ok: true, isActive: nextState.isActive });
@@ -363,27 +434,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// Automatically disarm shield when study phase timer reaches 00:00
+// Automatically disarm shield when study phase timer reaches 00:00 or tab closes
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
     await saveState({ isActive: false, endTime: null });
     await applyDynamicRules(shieldState);
+  } else if (alarm.name === HEARTBEAT_ALARM) {
+    await verifyOpenTimerTabs();
   }
 });
 
-// If the user closes all Lock-In tabs, automatically disarm the shield so they are never locked out
-chrome.tabs.onRemoved.addListener(async () => {
-  try {
-    await loadState();
-    if (!shieldState.isActive) return;
-    const allTabs = await chrome.tabs.query({});
-    const origin = shieldState.appOrigin || DEFAULT_APP_ORIGIN;
-    const hasOpenLockInTab = allTabs.some((t) => t.url && t.url.startsWith(origin));
-    if (!hasOpenLockInTab) {
-      await saveState({ isActive: false, endTime: null });
-      await applyDynamicRules(shieldState);
-    }
-  } catch (e) {}
+chrome.tabs.onRemoved.addListener(() => {
+  verifyOpenTimerTabs();
 });
 
 // When a blocked domain redirects to /focus?blocked=..., return the user to their original active timer tab
@@ -391,7 +453,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const currentUrl = changeInfo.url || tab.url;
   if (!currentUrl) return;
 
-  await loadState();
+  await verifyOpenTimerTabs();
   const origin = shieldState.appOrigin || DEFAULT_APP_ORIGIN;
 
   if (currentUrl.startsWith(origin) && currentUrl.includes("blocked=")) {
@@ -441,7 +503,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 `;
 
-  const readmeMd = `# Lock-In Hard Distraction Shield v2.0 (Chrome / Edge / Brave Extension)
+  const readmeMd = `# Lock-In Hard Distraction Shield v2.1 (Chrome / Edge / Brave Extension)
 
 This extension dynamically blocks your selected distraction sites **only while a Lock-In study timer is actively running**, and automatically unlocks them during breaks or when your timer is stopped.
 
@@ -452,7 +514,7 @@ This extension dynamically blocks your selected distraction sites **only while a
    - **Edge**: \`edge://extensions\`
    - **Brave**: \`brave://extensions\`
 3. Turn on **"Developer mode"** in the top-right corner.
-4. Remove any older version of "Lock-In Hard Distraction Shield", then click **"Load unpacked"** and select this unzipped folder.
+4. **IMPORTANT**: Click **"Remove"** on any older version of "Lock-In Hard Distraction Shield", then click **"Load unpacked"** and select this newly unzipped folder.
 5. Refresh your Lock-In tab. Notice the extension badge says **"ON"** only while a Study timer is running, and automatically turns off when paused, on break, or idle!
 `;
 

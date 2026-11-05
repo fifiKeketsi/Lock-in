@@ -76,26 +76,32 @@ function FocusPage(): React.JSX.Element | null {
       : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   );
 
-  const initialSession = useRef<ActiveFocusSessionState | null>(getActiveFocusSession());
-  const effectiveTaskId = searchTaskId || (initialSession.current?.mode === "solo" ? initialSession.current.taskId : undefined);
+  const initialSession = useRef<ActiveFocusSessionState | null>(
+    blockedQuery ? getActiveFocusSession() : null
+  );
+  const shouldRestoreSolo = Boolean(
+    blockedQuery &&
+      initialSession.current?.mode === "solo" &&
+      isFocusSessionActive(initialSession.current)
+  );
+  const effectiveTaskId =
+    searchTaskId || (shouldRestoreSolo ? initialSession.current?.taskId : undefined);
   const task = state.tasks.find((t) => t.id === effectiveTaskId);
 
-  // Study-to-Break Ratio State (restored from active in-progress session if present)
+  // Study-to-Break Ratio State (restored only when returning from a blocked redirect during an active session)
   const [studyDuration, setStudyDuration] = useState<number>(() =>
-    initialSession.current?.mode === "solo" ? initialSession.current.studyDuration : 25
+    shouldRestoreSolo && initialSession.current ? initialSession.current.studyDuration : 25
   );
   const [breakDuration, setBreakDuration] = useState<number>(() =>
-    initialSession.current?.mode === "solo" ? initialSession.current.breakDuration : 5
+    shouldRestoreSolo && initialSession.current ? initialSession.current.breakDuration : 5
   );
   const [phase, setPhase] = useState<TimerPhase>(() =>
-    initialSession.current?.mode === "solo" ? initialSession.current.phase : "study"
+    shouldRestoreSolo && initialSession.current ? initialSession.current.phase : "study"
   );
-  const [running, setRunning] = useState<boolean>(() =>
-    initialSession.current?.mode === "solo" ? Boolean(initialSession.current.running) : false
-  );
+  const [running, setRunning] = useState<boolean>(() => shouldRestoreSolo);
   const [remaining, setRemaining] = useState<number>(() => {
     const s = initialSession.current;
-    if (s && s.mode === "solo") {
+    if (shouldRestoreSolo && s) {
       if (s.running && s.endTime) {
         return Math.max(1, Math.ceil((s.endTime - Date.now()) / 1000));
       }
@@ -104,25 +110,20 @@ function FocusPage(): React.JSX.Element | null {
     return 25 * 60;
   });
   const [done, setDone] = useState(false);
+  const [staleExtensionBlockedDomain, setStaleExtensionBlockedDomain] = useState<string | null>(null);
 
   const endTimeRef = useRef<number | null>(
-    initialSession.current?.mode === "solo" && initialSession.current.running && initialSession.current.endTime
+    shouldRestoreSolo && initialSession.current?.endTime
       ? initialSession.current.endTime
       : null
   );
 
   // Blocked Apps State
-  const [blockedDomains, setBlockedDomains] = useState<string[]>(() => {
-    const list = getSavedBlockedDomains();
-    if (blockedQuery && !list.includes(blockedQuery)) {
-      return [...list, blockedQuery];
-    }
-    return list;
-  });
+  const [blockedDomains, setBlockedDomains] = useState<string[]>(() => getSavedBlockedDomains());
 
   // Active Procrastination Nudge State
   const [nudgesTriggered, setNudgesTriggered] = useState<number>(() =>
-    initialSession.current?.mode === "solo" ? initialSession.current.nudgesTriggered || 0 : 0
+    shouldRestoreSolo && initialSession.current ? initialSession.current.nudgesTriggered || 0 : 0
   );
   const [showNudgeModal, setShowNudgeModal] = useState(false);
   const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit" | "blocked">("blur");
@@ -134,11 +135,19 @@ function FocusPage(): React.JSX.Element | null {
   const [difficulty, setDifficulty] = useState(3);
   const [feedback, setFeedback] = useState("");
 
+  // Clear solo session when leaving /focus so the extension never blocks outside an active focus page
+  useEffect(() => {
+    return () => {
+      clearActiveFocusSession("solo");
+    };
+  }, []);
+
   // Persist solo session state and sync across tabs so redirecting back always resumes the exact timer in progress
   useEffect(() => {
-    const active = getActiveFocusSession();
-    // Do not overwrite an active study room timer if this solo timer isn't running
-    if (!running && active?.mode === "room" && active.running) return;
+    if (!running) {
+      clearActiveFocusSession("solo");
+      return;
+    }
 
     const sessionState: ActiveFocusSessionState = {
       mode: "solo",
@@ -227,8 +236,23 @@ function FocusPage(): React.JSX.Element | null {
     const activeStudy = isFocusSessionActive(saved);
 
     if (!activeStudy) {
-      // Not in an active study focus session! Disarm extension rules and clear ?blocked= query
+      // Not in an active study focus session! Disarm extension rules
       syncShieldExtension(null);
+      const hasDynamicExtension =
+        typeof document !== "undefined" &&
+        Boolean(document.documentElement.dataset.lockinShieldInstalled);
+
+      if (hasDynamicExtension) {
+        const target = blockedQuery.startsWith("http")
+          ? blockedQuery
+          : `https://${blockedQuery}`;
+        const t = setTimeout(() => {
+          window.location.replace(target);
+        }, 180);
+        return () => clearTimeout(t);
+      }
+
+      setStaleExtensionBlockedDomain(blockedQuery);
       navigate({
         to: "/focus",
         search: effectiveTaskId ? { taskId: effectiveTaskId } : {},
@@ -552,6 +576,55 @@ function FocusPage(): React.JSX.Element | null {
       />
 
       <main className="mx-auto max-w-3xl px-4 py-8 md:py-12 space-y-8">
+        {staleExtensionBlockedDomain && !running && (
+          <div className="rounded-3xl border-2 border-[#ef4444] bg-[#fee2e2] dark:bg-[#450a0a]/90 p-5 text-left space-y-3 shadow-md">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-[#dc2626] dark:text-[#fca5a5]">
+                  <ShieldAlert className="size-4" />
+                  <span>Outdated Browser Extension Detected (v1.3 Static Rules)</span>
+                </div>
+                <p className="text-xs sm:text-sm font-semibold text-[#7f1d1d] dark:text-[#fecaca] leading-relaxed">
+                  <strong>{staleExtensionBlockedDomain}</strong> was blocked even though your focus timer is OFF because your browser still has the old v1.3 extension loaded in{" "}
+                  <code className="px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10 font-mono">
+                    chrome://extensions
+                  </code>
+                  .
+                </p>
+              </div>
+            </div>
+            <ol className="text-xs text-[#7f1d1d] dark:text-[#fecaca] list-decimal list-inside space-y-1 font-medium">
+              <li>
+                Open{" "}
+                <code className="px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10 font-mono">
+                  chrome://extensions
+                </code>{" "}
+                (or <code className="px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10 font-mono">edge://extensions</code>) and click <strong>Remove</strong> on the old Lock-In Hard Distraction Shield.
+              </li>
+              <li>
+                Click <strong>Download Updated Shield v2.1</strong> below, unzip it into a new folder, and click <strong>Load unpacked</strong>.
+              </li>
+            </ol>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleDownloadExtension}
+                className="sfb-btn-primary text-xs py-2 px-4 inline-flex items-center gap-1.5"
+              >
+                <Download className="size-3.5" />
+                <span>Download Updated Shield v2.1</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setStaleExtensionBlockedDomain(null)}
+                className="sfb-btn-secondary text-xs py-2 px-3"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="text-center space-y-3">
           <div className="inline-flex items-center gap-2">

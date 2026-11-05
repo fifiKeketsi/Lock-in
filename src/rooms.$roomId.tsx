@@ -142,12 +142,24 @@ export function RoomPage(): React.JSX.Element | null {
       : remaining;
 
   const currentPhase: RoomTimerPhase = room?.timer.phase || "study";
-  const isRoomHardBlockActive = Boolean(room?.timer.running && currentPhase === "study");
+  const isRoomHardBlockActive = Boolean(
+    room?.timer.running &&
+      currentPhase === "study" &&
+      liveRemaining !== null &&
+      liveRemaining > 0
+  );
+
+  // Clear room focus session when leaving this room page
+  useEffect(() => {
+    return () => {
+      clearActiveFocusSession("room", roomId);
+    };
+  }, [roomId]);
 
   // Persist active room focus session so restricted app redirects always return to this study room
   useEffect(() => {
     if (!roomId) return;
-    if (room?.timer.running && room.timer.startedAt) {
+    if (room?.timer.running && room.timer.startedAt && liveRemaining !== null && liveRemaining > 0) {
       const endTime = new Date(room.timer.startedAt).getTime() + room.timer.durationMin * 60_000;
       saveActiveFocusSession({
         mode: "room",
@@ -165,7 +177,7 @@ export function RoomPage(): React.JSX.Element | null {
     } else {
       clearActiveFocusSession("room", roomId);
     }
-  }, [roomId, room?.timer, currentPhase, nudgeCount]);
+  }, [roomId, room?.timer, currentPhase, nudgeCount, liveRemaining]);
 
   // Listen for restricted app opens from other tabs and acknowledge so the new tab closes and returns here
   useEffect(() => {
