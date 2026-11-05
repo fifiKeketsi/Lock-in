@@ -176,7 +176,7 @@ export function RoomPage(): React.JSX.Element | null {
       const data = e.data;
       if (!data || data.senderTabId === tabIdRef.current) return;
 
-      if (data.type === "BLOCKED_ATTEMPT") {
+      if (data.type === "BLOCKED_ATTEMPT" && isRoomHardBlockActive) {
         bc.postMessage({
           type: "ORIGINAL_TAB_ACK",
           targetTabId: data.senderTabId,
@@ -190,16 +190,14 @@ export function RoomPage(): React.JSX.Element | null {
           window.focus();
         } catch {}
 
-        if (isRoomHardBlockActive) {
-          setNudgeCount((c) => c + 1);
-          setNudgeReason("blocked");
-          setBlockedDomainAlert(data.domain || null);
-          setShowNudgeModal(true);
-          playAlertNudge();
-          sendMessage(
-            `⚠️ [Shield] Blocked attempt to open ${data.domain || "restricted app"} during Deep Work! Returned to focus room.`
-          );
-        }
+        setNudgeCount((c) => c + 1);
+        setNudgeReason("blocked");
+        setBlockedDomainAlert(data.domain || null);
+        setShowNudgeModal(true);
+        playAlertNudge();
+        sendMessage(
+          `⚠️ [Shield] Blocked attempt to open ${data.domain || "restricted app"} during Deep Work! Returned to focus room.`
+        );
       }
     };
 

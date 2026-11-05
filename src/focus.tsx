@@ -24,6 +24,8 @@ import {
   getActiveFocusSession,
   saveActiveFocusSession,
   clearActiveFocusSession,
+  isFocusSessionActive,
+  syncShieldExtension,
   FOCUS_SYNC_CHANNEL,
   type ActiveFocusSessionState,
 } from "@/lib/app-blocking";
@@ -175,7 +177,7 @@ function FocusPage(): React.JSX.Element | null {
       const data = e.data;
       if (!data || data.senderTabId === tabIdRef.current) return;
 
-      if (data.type === "BLOCKED_ATTEMPT" && !blockedQuery) {
+      if (data.type === "BLOCKED_ATTEMPT" && !blockedQuery && running && phase === "study") {
         // This is the original focus tab! Acknowledge so the newly opened restricted tab can close itself
         bc.postMessage({
           type: "ORIGINAL_TAB_ACK",
@@ -189,13 +191,11 @@ function FocusPage(): React.JSX.Element | null {
           window.focus();
         } catch {}
 
-        if (running && phase === "study") {
-          setNudgesTriggered((n) => n + 1);
-          setNudgeReason("blocked");
-          setBlockedDomainAlert(data.domain || null);
-          setShowNudgeModal(true);
-          playAlertNudge();
-        }
+        setNudgesTriggered((n) => n + 1);
+        setNudgeReason("blocked");
+        setBlockedDomainAlert(data.domain || null);
+        setShowNudgeModal(true);
+        playAlertNudge();
       } else if (data.type === "STATE_SYNC" && data.session?.mode === "solo") {
         const s = data.session as ActiveFocusSessionState;
         setStudyDuration(s.studyDuration);
@@ -224,6 +224,19 @@ function FocusPage(): React.JSX.Element | null {
     if (!blockedQuery) return;
 
     const saved = getActiveFocusSession();
+    const activeStudy = isFocusSessionActive(saved);
+
+    if (!activeStudy) {
+      // Not in an active study focus session! Disarm extension rules and clear ?blocked= query
+      syncShieldExtension(null);
+      navigate({
+        to: "/focus",
+        search: effectiveTaskId ? { taskId: effectiveTaskId } : {},
+        replace: true,
+      });
+      return;
+    }
+
     let bc: BroadcastChannel | null = null;
     let ackReceived = false;
 
@@ -279,7 +292,7 @@ function FocusPage(): React.JSX.Element | null {
       }
 
       // Restore in-progress solo timer on this page and trigger the blocked app nudge
-      if (saved?.mode === "solo" && saved.running) {
+      if (saved?.mode === "solo" && saved.running && saved.phase === "study") {
         setNudgesTriggered((n) => n + 1);
         setNudgeReason("blocked");
         setBlockedDomainAlert(blockedQuery);
