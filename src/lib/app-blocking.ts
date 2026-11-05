@@ -67,9 +67,7 @@ export function getActiveFocusSession(): ActiveFocusSessionState | null {
 
 export function isFocusSessionActive(session: ActiveFocusSessionState | null = getActiveFocusSession()): boolean {
   if (!session || !session.running || session.phase !== "study") return false;
-  if (session.endTime && session.endTime <= Date.now()) return false;
-  // Ignore sessions that haven't been updated recently
-  if (Date.now() - (session.updatedAt || 0) > 15_000) return false;
+  if (!session.endTime || session.endTime <= Date.now()) return false;
   return true;
 }
 
@@ -79,9 +77,7 @@ export function syncShieldExtension(
 ) {
   if (typeof window === "undefined") return;
   try {
-    const path = window.location.pathname;
-    const isFocusOrRoomRoute = path === "/focus" || path.startsWith("/rooms/");
-    const isActive = isFocusOrRoomRoute && isFocusSessionActive(session);
+    const isActive = isFocusSessionActive(session);
     window.postMessage(
       {
         source: "LOCKIN_WEB_APP",
@@ -149,7 +145,7 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
   const manifest = {
     manifest_version: 3,
     name: "Lock-In Hard Distraction Shield",
-    version: "2.1.0",
+    version: "2.2.0",
     description: "Dynamically blocks selected distraction sites ONLY during active Lock-In study sessions and unlocks automatically on breaks or when idle.",
     permissions: ["declarativeNetRequest", "storage", "alarms", "tabs"],
     host_permissions: ["<all_urls>"],
@@ -168,7 +164,7 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
     },
   };
 
-  const contentJs = `// Lock-In Hard Distraction Shield - Content Script Bridge (v2.1)
+  const contentJs = `// Lock-In Hard Distraction Shield - Content Script Bridge (v2.2)
 (function () {
   const DEFAULT_ORIGIN = ${JSON.stringify(appOrigin)};
   const SESSION_KEY = "lockin.active_focus_session.v1";
@@ -178,7 +174,7 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
   function markInstalled() {
     try {
       if (document.documentElement) {
-        document.documentElement.dataset.lockinShieldInstalled = "2.1.0";
+        document.documentElement.dataset.lockinShieldInstalled = "2.2.0";
       }
     } catch (e) {}
   }
@@ -187,13 +183,13 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
     markInstalled();
   }
 
-  function isFocusOrRoomPath() {
-    const p = window.location.pathname || "";
-    return p === "/focus" || p.startsWith("/rooms/");
-  }
-
   function readAndSyncState() {
     try {
+      // Do not overwrite session state from a transient ?blocked= redirect tab
+      if (window.location.search && window.location.search.includes("blocked=")) {
+        return;
+      }
+
       const rawSession = localStorage.getItem(SESSION_KEY);
       const rawBlocked = localStorage.getItem(BLOCKED_KEY);
       if (rawSession !== null || rawBlocked !== null) {
@@ -207,14 +203,12 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
       const blockedDomains = rawBlocked ? JSON.parse(rawBlocked) : ${JSON.stringify(domains)};
 
       const now = Date.now();
-      const isFresh = session && now - (session.updatedAt || 0) < 15000;
-      const notExpired = session && (!session.endTime || session.endTime > now);
       const isActive = Boolean(
-        isFocusOrRoomPath() &&
-        isFresh &&
-        notExpired &&
+        session &&
         session.running === true &&
-        session.phase === "study"
+        session.phase === "study" &&
+        session.endTime &&
+        session.endTime > now
       );
 
       chrome.runtime.sendMessage({
@@ -236,24 +230,12 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
     isConfirmedLockInPage = true;
     markInstalled();
 
-    const activeOnRoute = Boolean(data.isActive && isFocusOrRoomPath());
-
     chrome.runtime.sendMessage({
       type: "LOCKIN_SYNC_STATE",
-      isActive: activeOnRoute,
-      session: activeOnRoute ? data.session : null,
+      isActive: Boolean(data.isActive),
+      session: data.isActive ? data.session : null,
       blockedDomains: Array.isArray(data.blockedDomains) ? data.blockedDomains : ${JSON.stringify(domains)},
       appOrigin: data.appOrigin || window.location.origin,
-    }).catch(() => {});
-  });
-
-  window.addEventListener("pagehide", () => {
-    if (!isConfirmedLockInPage) return;
-    chrome.runtime.sendMessage({
-      type: "LOCKIN_SYNC_STATE",
-      isActive: false,
-      session: null,
-      appOrigin: window.location.origin,
     }).catch(() => {});
   });
 
@@ -262,15 +244,14 @@ export function buildExtensionZip(blockedDomains: string[]): Blob {
   document.addEventListener("DOMContentLoaded", readAndSyncState);
 
   readAndSyncState();
-  setInterval(readAndSyncState, 1500);
+  setInterval(readAndSyncState, 1000);
 })();
 `;
 
-  const backgroundJs = `// Lock-In Hard Distraction Shield - Dynamic Background Service Worker (v2.1)
+  const backgroundJs = `// Lock-In Hard Distraction Shield - Dynamic Background Service Worker (v2.2)
 const DEFAULT_APP_ORIGIN = ${JSON.stringify(appOrigin)};
 const DEFAULT_DOMAINS = ${JSON.stringify(domains)};
 const ALARM_NAME = "lockin_study_phase_end";
-const HEARTBEAT_ALARM = "lockin_heartbeat_check";
 
 let shieldState = {
   isActive: false,
@@ -278,7 +259,6 @@ let shieldState = {
   appOrigin: DEFAULT_APP_ORIGIN,
   originPath: "/focus",
   endTime: null,
-  lastActiveSync: 0,
 };
 
 async function loadState() {
@@ -307,7 +287,8 @@ async function applyDynamicRules(state) {
     const now = Date.now();
     const shouldBlock = Boolean(
       state.isActive &&
-      (!state.endTime || state.endTime > now) &&
+      state.endTime &&
+      state.endTime > now &&
       Array.isArray(state.blockedDomains) &&
       state.blockedDomains.length > 0
     );
@@ -371,52 +352,24 @@ async function applyDynamicRules(state) {
   }
 }
 
-async function verifyOpenTimerTabs() {
-  try {
-    await loadState();
-    if (!shieldState.isActive) return;
-    const allTabs = await chrome.tabs.query({});
-    const origin = shieldState.appOrigin || DEFAULT_APP_ORIGIN;
-    const hasActiveFocusOrRoomTab = allTabs.some((t) => {
-      if (!t.url || !t.url.startsWith(origin)) return false;
-      try {
-        const u = new URL(t.url);
-        return (
-          !u.searchParams.has("blocked") &&
-          (u.pathname === "/focus" || u.pathname.startsWith("/rooms/"))
-        );
-      } catch (e) {
-        return false;
-      }
-    });
-
-    if (!hasActiveFocusOrRoomTab) {
-      await saveState({ isActive: false, endTime: null });
-      await applyDynamicRules(shieldState);
-    }
-  } catch (e) {}
-}
-
 // Start in unlocked standby state on install/startup until an active focus timer arms it
 chrome.runtime.onInstalled.addListener(async () => {
-  await saveState({ isActive: false, endTime: null, lastActiveSync: 0 });
+  await saveState({ isActive: false, endTime: null });
   await applyDynamicRules(shieldState);
-  await chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  await saveState({ isActive: false, endTime: null, lastActiveSync: 0 });
+  await saveState({ isActive: false, endTime: null });
   await applyDynamicRules(shieldState);
 });
 
-// Immediately ensure rules match current state when worker wakes up
 loadState().then((s) => applyDynamicRules(s));
 
 // Receive real-time state syncs from the Lock-In web app content script
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === "LOCKIN_SYNC_STATE") {
     const session = message.session;
-    const isActive = Boolean(message.isActive);
+    const isActive = Boolean(message.isActive && session && session.endTime && session.endTime > Date.now());
     const nextState = {
       isActive,
       blockedDomains:
@@ -425,8 +378,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           : shieldState.blockedDomains,
       appOrigin: message.appOrigin || shieldState.appOrigin || DEFAULT_APP_ORIGIN,
       originPath: (session && session.originPath) || "/focus",
-      endTime: isActive && session ? session.endTime || null : null,
-      lastActiveSync: isActive ? Date.now() : 0,
+      endTime: isActive && session ? session.endTime : null,
     };
     saveState(nextState).then(() => applyDynamicRules(nextState));
     sendResponse({ ok: true, isActive: nextState.isActive });
@@ -434,18 +386,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// Automatically disarm shield when study phase timer reaches 00:00 or tab closes
+// Automatically disarm shield when study phase timer reaches 00:00
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
     await saveState({ isActive: false, endTime: null });
     await applyDynamicRules(shieldState);
-  } else if (alarm.name === HEARTBEAT_ALARM) {
-    await verifyOpenTimerTabs();
   }
 });
 
+// If the user closes all Lock-In tabs completely, disarm after a short delay
 chrome.tabs.onRemoved.addListener(() => {
-  verifyOpenTimerTabs();
+  setTimeout(async () => {
+    try {
+      await loadState();
+      if (!shieldState.isActive) return;
+      const allTabs = await chrome.tabs.query({});
+      const origin = shieldState.appOrigin || DEFAULT_APP_ORIGIN;
+      const hasAnyLockInTab = allTabs.some((t) => t.url && t.url.startsWith(origin));
+      if (!hasAnyLockInTab) {
+        await saveState({ isActive: false, endTime: null });
+        await applyDynamicRules(shieldState);
+      }
+    } catch (e) {}
+  }, 1500);
 });
 
 // When a blocked domain redirects to /focus?blocked=..., return the user to their original active timer tab
@@ -453,23 +416,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const currentUrl = changeInfo.url || tab.url;
   if (!currentUrl) return;
 
-  await verifyOpenTimerTabs();
+  await loadState();
   const origin = shieldState.appOrigin || DEFAULT_APP_ORIGIN;
 
   if (currentUrl.startsWith(origin) && currentUrl.includes("blocked=")) {
     try {
       const parsed = new URL(currentUrl);
       const blockedDomain = parsed.searchParams.get("blocked");
-
-      // Safety check: if not currently in an active study block, disarm rules and let navigation through
-      if (!shieldState.isActive || (shieldState.endTime && shieldState.endTime <= Date.now())) {
-        await saveState({ isActive: false, endTime: null });
-        await applyDynamicRules(shieldState);
-        if (blockedDomain) {
-          await chrome.tabs.update(tabId, { url: "https://" + blockedDomain });
-        }
-        return;
-      }
 
       const allTabs = await chrome.tabs.query({});
       const existingTimerTab = allTabs.find(

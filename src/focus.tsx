@@ -76,19 +76,16 @@ function FocusPage(): React.JSX.Element | null {
       : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   );
 
-  const initialSession = useRef<ActiveFocusSessionState | null>(
-    blockedQuery ? getActiveFocusSession() : null
-  );
+  const initialSession = useRef<ActiveFocusSessionState | null>(getActiveFocusSession());
   const shouldRestoreSolo = Boolean(
-    blockedQuery &&
-      initialSession.current?.mode === "solo" &&
+    initialSession.current?.mode === "solo" &&
       isFocusSessionActive(initialSession.current)
   );
   const effectiveTaskId =
     searchTaskId || (shouldRestoreSolo ? initialSession.current?.taskId : undefined);
   const task = state.tasks.find((t) => t.id === effectiveTaskId);
 
-  // Study-to-Break Ratio State (restored only when returning from a blocked redirect during an active session)
+  // Study-to-Break Ratio State (restored from active in-progress solo session if present)
   const [studyDuration, setStudyDuration] = useState<number>(() =>
     shouldRestoreSolo && initialSession.current ? initialSession.current.studyDuration : 25
   );
@@ -135,19 +132,22 @@ function FocusPage(): React.JSX.Element | null {
   const [difficulty, setDifficulty] = useState(3);
   const [feedback, setFeedback] = useState("");
 
-  // Clear solo session when leaving /focus so the extension never blocks outside an active focus page
-  useEffect(() => {
-    return () => {
-      clearActiveFocusSession("solo");
-    };
-  }, []);
-
   // Persist solo session state and sync across tabs so redirecting back always resumes the exact timer in progress
   useEffect(() => {
+    // Do not overwrite an active session if this tab is just handling a ?blocked= redirect
+    if (blockedQuery) return;
+
+    const active = getActiveFocusSession();
+    // Do not overwrite an active study room timer if this solo timer isn't running
+    if (!running && active?.mode === "room" && isFocusSessionActive(active)) return;
+
     if (!running) {
       clearActiveFocusSession("solo");
       return;
     }
+
+    const targetEnd = endTimeRef.current ?? Date.now() + remaining * 1000;
+    endTimeRef.current = targetEnd;
 
     const sessionState: ActiveFocusSessionState = {
       mode: "solo",
@@ -157,7 +157,7 @@ function FocusPage(): React.JSX.Element | null {
       phase,
       studyDuration,
       breakDuration,
-      endTime: running ? endTimeRef.current : null,
+      endTime: running ? targetEnd : null,
       remainingSec: remaining,
       nudgesTriggered,
       updatedAt: Date.now(),
@@ -175,7 +175,7 @@ function FocusPage(): React.JSX.Element | null {
         bc.close();
       } catch {}
     }
-  }, [running, phase, studyDuration, breakDuration, remaining, nudgesTriggered, effectiveTaskId]);
+  }, [running, phase, studyDuration, breakDuration, remaining, nudgesTriggered, effectiveTaskId, blockedQuery]);
 
   // Listen for cross-tab blocked app attempts and state syncs
   useEffect(() => {
@@ -233,25 +233,11 @@ function FocusPage(): React.JSX.Element | null {
     if (!blockedQuery) return;
 
     const saved = getActiveFocusSession();
-    const activeStudy = isFocusSessionActive(saved);
+    const activeStudy = isFocusSessionActive(saved) || (running && phase === "study");
 
     if (!activeStudy) {
-      // Not in an active study focus session! Disarm extension rules
+      // Not in an active study focus session! Disarm extension rules and show notice if old extension triggered it
       syncShieldExtension(null);
-      const hasDynamicExtension =
-        typeof document !== "undefined" &&
-        Boolean(document.documentElement.dataset.lockinShieldInstalled);
-
-      if (hasDynamicExtension) {
-        const target = blockedQuery.startsWith("http")
-          ? blockedQuery
-          : `https://${blockedQuery}`;
-        const t = setTimeout(() => {
-          window.location.replace(target);
-        }, 180);
-        return () => clearTimeout(t);
-      }
-
       setStaleExtensionBlockedDomain(blockedQuery);
       navigate({
         to: "/focus",

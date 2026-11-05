@@ -149,13 +149,6 @@ export function RoomPage(): React.JSX.Element | null {
       liveRemaining > 0
   );
 
-  // Clear room focus session when leaving this room page
-  useEffect(() => {
-    return () => {
-      clearActiveFocusSession("room", roomId);
-    };
-  }, [roomId]);
-
   // Persist active room focus session so restricted app redirects always return to this study room
   useEffect(() => {
     if (!roomId) return;
