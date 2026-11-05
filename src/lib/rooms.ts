@@ -1,23 +1,24 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { joinRoom, selfId } from "trystero/nostr";
+import { defaultRelayUrls, joinRoom, selfId } from "trystero/nostr";
 import {
   doc,
   getDoc,
   setDoc,
   collection,
-  addDoc,
   deleteDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
 export const TRYSTERO_APP_ID = "lockin-study-network-v2";
 
-export const NOSTR_RELAYS = [
-  "wss://nostr.mom",
-  "wss://nos.lol",
-  "wss://relay.damus.io",
-  "wss://relay.primal.net",
-];
+export const NOSTR_RELAYS = defaultRelayUrls;
+
+// Unique per-tab/per-window runtime ID so duplicating a tab or opening an invite link in a new tab never collides
+const TAB_INSTANCE_ID =
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
 
 export function normalizeRoomId(id: string | undefined | null): string {
   if (!id) return "";
@@ -118,18 +119,13 @@ export function getMe(authUser?: { id: string; name: string; email: string } | n
     savedEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
   }
 
-  // Create a persistent unique session ID for this browser tab/device
+  // Create a unique session ID for this specific browser tab/window instance
   const userId = authUser ? authUser.id : "guest";
-  const sidKey = `lockin.sid.v5.${userId}`;
-  let sid = sessionStorage.getItem(sidKey);
-  if (!sid) {
-    sid = `${userId}_${Math.random().toString(36).slice(2, 8)}`;
-    sessionStorage.setItem(sidKey, sid);
-  }
+  const sid = `${userId}_${TAB_INSTANCE_ID}`;
 
   const name = authUser
     ? authUser.name || authUser.email.split("@")[0] || "Member"
-    : savedGuestName || `Friend ${sid.slice(-4)}`;
+    : savedGuestName || `Friend ${TAB_INSTANCE_ID.slice(-4)}`;
 
   const me: MeProfile = {
     id: sid,
@@ -313,6 +309,7 @@ export function useRoom(
   const [activeMembersMap, setActiveMembersMap] = useState<Record<string, RoomMember>>(() => ({
     [me.id]: {
       id: me.id,
+      peerId: selfId,
       name: me.name,
       emoji: me.emoji,
       goal: "Focusing",
@@ -330,7 +327,7 @@ export function useRoom(
     localMemberRef.current = activeMembersMap[me.id];
   }, [activeMembersMap, me.id]);
 
-  // Dual-Transport P2P Mesh Network: High-Speed Nostr Relays + BroadcastChannel (Local)
+  // Triple-Transport Mesh: Firestore Real-Time onSnapshot + Trystero WebRTC + BroadcastChannel (Local)
   useEffect(() => {
     if (!cleanRoomId || typeof window === "undefined") return;
 
@@ -352,14 +349,6 @@ export function useRoom(
         activeSession = null;
       }
 
-      console.log("[LockIn Trystero] Initializing joinRoom with:", {
-        appId: TRYSTERO_APP_ID,
-        roomId: cleanRoomId,
-        password: "(none)",
-        relayUrls: NOSTR_RELAYS,
-        selfId,
-      });
-
       let roomInstance: any = null;
       try {
         roomInstance = joinRoom(
@@ -367,6 +356,7 @@ export function useRoom(
             appId: TRYSTERO_APP_ID,
             relayConfig: {
               urls: NOSTR_RELAYS,
+              redundancy: 6,
               warnOnRelayFailure: false,
             },
           },
@@ -406,8 +396,9 @@ export function useRoom(
       const local = localMemberRef.current;
       return {
         id: currentMe.id,
-        name: currentMe.name,
-        emoji: currentMe.emoji,
+        peerId: selfId,
+        name: local?.name || currentMe.name,
+        emoji: local?.emoji || currentMe.emoji,
         goal: local?.goal || "Focusing",
         joinedAt: local?.joinedAt || new Date().toISOString(),
         lastSeen: String(Date.now()),
@@ -416,9 +407,20 @@ export function useRoom(
       };
     };
 
+    const syncMemberToFirestore = (member: RoomMember) => {
+      setDoc(
+        doc(db, "rooms", cleanRoomId, "participants", member.id),
+        {
+          ...member,
+          peerId: selfId,
+          lastSeen: String(Date.now()),
+        },
+        { merge: true }
+      ).catch(() => {});
+    };
+
     if (currentRoom) {
       currentRoom.onPeerJoin = (peerId: string) => {
-        console.log(`[LockIn Trystero] onPeerJoin fired! Remote peer joined: ${peerId} (room: ${cleanRoomId})`);
         if (!isMounted) return;
         const myMember = getMyMember();
         presenceAction?.send(myMember, { target: peerId });
@@ -426,7 +428,6 @@ export function useRoom(
       };
 
       currentRoom.onPeerLeave = (peerId: string) => {
-        console.log(`[LockIn Trystero] onPeerLeave fired! Remote peer left: ${peerId} (room: ${cleanRoomId})`);
         if (!isMounted) return;
         setActiveMembersMap((prev) => {
           const next: Record<string, RoomMember> = {};
@@ -442,13 +443,12 @@ export function useRoom(
       if (presenceAction) {
         presenceAction.onMessage = (peerMember: RoomMember, context: any) => {
           const senderPeerId = typeof context === "string" ? context : context?.peerId;
-          console.log(`[LockIn Trystero] presenceAction received:`, peerMember?.name, `peerId:`, senderPeerId);
           if (!isMounted || !peerMember || peerMember.id === meRef.current.id) return;
           setActiveMembersMap((prev) => ({
             ...prev,
             [peerMember.id]: {
               ...peerMember,
-              peerId: senderPeerId,
+              peerId: senderPeerId || peerMember.peerId,
               lastSeen: String(Date.now()),
             },
           }));
@@ -460,7 +460,6 @@ export function useRoom(
 
       if (timerAction) {
         timerAction.onMessage = (timer: RoomTimer) => {
-          console.log(`[LockIn Trystero] timerAction received:`, timer);
           if (!isMounted || !timer) return;
           setRoomData((prev) => ({ ...prev, timer }));
         };
@@ -468,11 +467,10 @@ export function useRoom(
 
       if (chatAction) {
         chatAction.onMessage = (msg: RoomMessage) => {
-          console.log(`[LockIn Trystero] chatAction received:`, msg);
           if (!isMounted || !msg) return;
           setMessages((prev) => {
             if (prev.some((m) => m.id === msg.id)) return prev;
-            return [...prev, msg];
+            return [...prev, msg].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
           });
         };
       }
@@ -512,7 +510,7 @@ export function useRoom(
       } else if (data.type === "CHAT" && data.message) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === data.message.id)) return prev;
-          return [...prev, data.message];
+          return [...prev, data.message].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
         });
       } else if (data.type === "PATCH" && data.memberId && data.patch) {
         setActiveMembersMap((prev) => {
@@ -533,21 +531,130 @@ export function useRoom(
 
     bc?.addEventListener("message", handleBcMessage);
 
-    // Initial announcement across both transports
+    // 3. Firestore Real-Time Listeners (Cross-device, cross-network guarantee)
+    let unsubRoomDoc: (() => void) | null = null;
+    let unsubParticipants: (() => void) | null = null;
+    let unsubMessages: (() => void) | null = null;
+
+    try {
+      unsubRoomDoc = onSnapshot(
+        doc(db, "rooms", cleanRoomId),
+        (snap) => {
+          if (!isMounted || !snap.exists()) return;
+          const data = snap.data() as Partial<Room>;
+          setRoomData((prev) => ({
+            id: cleanRoomId,
+            name: data.name || prev.name,
+            timer: data.timer || prev.timer,
+          }));
+        },
+        () => {}
+      );
+
+      unsubParticipants = onSnapshot(
+        collection(db, "rooms", cleanRoomId, "participants"),
+        (snap) => {
+          if (!isMounted) return;
+          const now = Date.now();
+          setActiveMembersMap((prev) => {
+            const myId = meRef.current.id;
+            const next: Record<string, RoomMember> = {
+              [myId]: prev[myId] || getMyMember(),
+            };
+            snap.docs.forEach((d) => {
+              const m = d.data() as RoomMember;
+              if (!m || !m.id || m.id === myId) return;
+              const seenAt = Number(m.lastSeen || 0);
+              if (now - seenAt < 25_000) {
+                next[m.id] = {
+                  ...prev[m.id],
+                  ...m,
+                  peerId: m.peerId || prev[m.id]?.peerId,
+                };
+              }
+            });
+            // Keep any recently seen BroadcastChannel/Trystero peers not yet flushed to Firestore
+            Object.entries(prev).forEach(([id, member]) => {
+              if (id !== myId && !next[id]) {
+                const seenAt = Number(member.lastSeen || 0);
+                if (now - seenAt < 12_000) {
+                  next[id] = member;
+                }
+              }
+            });
+            return next;
+          });
+        },
+        () => {}
+      );
+
+      unsubMessages = onSnapshot(
+        collection(db, "rooms", cleanRoomId, "messages"),
+        (snap) => {
+          if (!isMounted) return;
+          const remoteMsgs = snap.docs
+            .map((d) => d.data() as RoomMessage)
+            .filter((m) => Boolean(m && m.id && m.text));
+          if (remoteMsgs.length === 0) return;
+          setMessages((prev) => {
+            const byId = new Map<string, RoomMessage>();
+            prev.forEach((m) => byId.set(m.id, m));
+            remoteMsgs.forEach((m) => byId.set(m.id, m));
+            return Array.from(byId.values()).sort((a, b) =>
+              (a.at || "").localeCompare(b.at || "")
+            );
+          });
+        },
+        () => {}
+      );
+    } catch {}
+
+    // Initial announcement across all 3 transports (Trystero + BroadcastChannel + Firestore)
     const initialMe = getMyMember();
     presenceAction?.send(initialMe);
     bc?.postMessage({ type: "PRESENCE", member: initialMe, isPing: true });
+    syncMemberToFirestore(initialMe);
 
-    // Periodic heartbeat every 3 seconds
+    // Periodic heartbeat every 3 seconds + stale participant pruning
+    let tickCount = 0;
     const heartbeat = setInterval(() => {
+      tickCount++;
       const current = getMyMember();
       presenceAction?.send(current);
       bc?.postMessage({ type: "PRESENCE", member: current, isPing: false });
+      if (tickCount % 2 === 0) {
+        syncMemberToFirestore(current);
+      }
+      // Prune participants silent for >25s
+      const now = Date.now();
+      setActiveMembersMap((prev) => {
+        const myId = meRef.current.id;
+        let changed = false;
+        const next: Record<string, RoomMember> = {};
+        Object.entries(prev).forEach(([id, m]) => {
+          if (id === myId || now - Number(m.lastSeen || 0) < 25_000) {
+            next[id] = m;
+          } else {
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
     }, 3000);
+
+    const handleBeforeUnload = () => {
+      bc?.postMessage({ type: "LEAVE", memberId: meRef.current.id });
+      deleteDoc(doc(db, "rooms", cleanRoomId, "participants", meRef.current.id)).catch(() => {});
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
       isMounted = false;
       clearInterval(heartbeat);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      unsubRoomDoc?.();
+      unsubParticipants?.();
+      unsubMessages?.();
       bc?.postMessage({ type: "LEAVE", memberId: meRef.current.id });
       bc?.removeEventListener("message", handleBcMessage);
       bc?.close();
@@ -555,13 +662,14 @@ export function useRoom(
       if (activeSession && activeSession.roomId === cleanRoomId) {
         activeSession.refCount--;
         if (activeSession.refCount <= 0) {
+          const leavingMemberId = meRef.current.id;
           activeSession.leaveTimer = setTimeout(() => {
             if (activeSession && activeSession.refCount <= 0) {
-              console.log(`[LockIn Trystero] Calling room.leave() for room ${cleanRoomId}`);
               try {
                 activeSession.room.leave();
               } catch {}
               activeSession = null;
+              deleteDoc(doc(db, "rooms", cleanRoomId, "participants", leavingMemberId)).catch(() => {});
             }
           }, 400);
         }
@@ -669,7 +777,7 @@ export function useRoom(
         bc?.close();
       } catch {}
 
-      addDoc(collection(db, "rooms", cleanRoomId, "messages"), newMsg).catch(() => { });
+      setDoc(doc(db, "rooms", cleanRoomId, "messages", newMsg.id), newMsg).catch(() => { });
     },
     [cleanRoomId]
   );
@@ -679,9 +787,10 @@ export function useRoom(
       if (!cleanRoomId) return;
       setActiveMembersMap((prev) => {
         const current = prev[me.id];
-        const updated = {
+        const updated: RoomMember = {
           ...(current || {
             id: me.id,
+            peerId: selfId,
             name: me.name,
             emoji: me.emoji,
             cameraOn: false,
@@ -698,7 +807,13 @@ export function useRoom(
           }
         } catch { }
 
-        setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { goal, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+        try {
+          const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+          bc?.postMessage({ type: "PATCH", memberId: me.id, patch: { goal } });
+          bc?.close();
+        } catch {}
+
+        setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), updated, { merge: true }).catch(() => { });
 
         return { ...prev, [me.id]: updated };
       });
@@ -711,9 +826,10 @@ export function useRoom(
     setActiveMembersMap((prev) => {
       const current = prev[me.id];
       const nextMic = !(current?.micOn ?? true);
-      const updated = {
+      const updated: RoomMember = {
         ...(current || {
           id: me.id,
+          peerId: selfId,
           name: me.name,
           emoji: me.emoji,
           goal: "Focusing",
@@ -730,7 +846,13 @@ export function useRoom(
         }
       } catch { }
 
-      setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { micOn: nextMic, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+      try {
+        const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+        bc?.postMessage({ type: "PATCH", memberId: me.id, patch: { micOn: nextMic } });
+        bc?.close();
+      } catch {}
+
+      setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), updated, { merge: true }).catch(() => { });
 
       return { ...prev, [me.id]: updated };
     });
@@ -741,9 +863,10 @@ export function useRoom(
     setActiveMembersMap((prev) => {
       const current = prev[me.id];
       const nextCam = !(current?.cameraOn ?? false);
-      const updated = {
+      const updated: RoomMember = {
         ...(current || {
           id: me.id,
+          peerId: selfId,
           name: me.name,
           emoji: me.emoji,
           goal: "Focusing",
@@ -760,7 +883,13 @@ export function useRoom(
         }
       } catch { }
 
-      setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { cameraOn: nextCam, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+      try {
+        const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+        bc?.postMessage({ type: "PATCH", memberId: me.id, patch: { cameraOn: nextCam } });
+        bc?.close();
+      } catch {}
+
+      setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), updated, { merge: true }).catch(() => { });
 
       return { ...prev, [me.id]: updated };
     });
@@ -772,9 +901,10 @@ export function useRoom(
       const newEmoji = emoji || me.emoji;
       setActiveMembersMap((prev) => {
         const current = prev[me.id];
-        const updated = {
+        const updated: RoomMember = {
           ...(current || {
             id: me.id,
+            peerId: selfId,
             goal: "Focusing",
             cameraOn: false,
             micOn: true,
@@ -791,7 +921,13 @@ export function useRoom(
           }
         } catch { }
 
-        setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), { name, emoji: newEmoji, lastSeen: Date.now() }, { merge: true }).catch(() => { });
+        try {
+          const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(`lockin_bc_${cleanRoomId}`) : null;
+          bc?.postMessage({ type: "PATCH", memberId: me.id, patch: { name, emoji: newEmoji } });
+          bc?.close();
+        } catch {}
+
+        setDoc(doc(db, "rooms", cleanRoomId, "participants", me.id), updated, { merge: true }).catch(() => { });
 
         return { ...prev, [me.id]: updated };
       });

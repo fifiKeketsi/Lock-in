@@ -1,5 +1,21 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { Mic, MicOff, Video, VideoOff, AlertCircle, RefreshCw, UserPlus } from "lucide-react";
+import {
+  collection,
+  doc,
+  setDoc,
+  onSnapshot,
+  deleteDoc,
+} from "firebase/firestore";
+import { db } from "../lib/firebase";
+
+const RTC_CONFIG: RTCConfiguration = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+  ],
+};
 
 interface VideoRoomProps {
   roomId?: string;
@@ -115,6 +131,7 @@ function RemoteVideo({
 }
 
 export function VideoRoom({
+  roomId,
   members,
   currentUserId,
   trysteroRoom,
@@ -124,6 +141,14 @@ export function VideoRoom({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [mediaError, setMediaError] = useState<string | null>(null);
+
+  const localStreamRef = useRef<MediaStream | null>(null);
+  localStreamRef.current = localStream;
+
+  const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const processedSignalsRef = useRef<Set<string>>(new Set());
+  const mountTimeRef = useRef<number>(Date.now());
 
   const currentUser = members.find((m) => m.id === currentUserId);
   const safeMembers = members.length > 0 ? members : currentUser ? [currentUser] : [];
@@ -139,7 +164,7 @@ export function VideoRoom({
 
       if (trysteroRoom) {
         try {
-          trysteroRoom.addStream(stream);
+          trysteroRoom.addStream(stream, null, { memberId: currentUserId });
         } catch (e) {
           console.warn("Trystero addStream error:", e);
         }
@@ -152,7 +177,7 @@ export function VideoRoom({
         setLocalStream(audioStream);
         if (trysteroRoom) {
           try {
-            trysteroRoom.addStream(audioStream);
+            trysteroRoom.addStream(audioStream, null, { memberId: currentUserId });
           } catch {}
         }
       } catch (err2: any) {
@@ -163,13 +188,13 @@ export function VideoRoom({
         );
       }
     }
-  }, [trysteroRoom]);
+  }, [trysteroRoom, currentUserId]);
 
   useEffect(() => {
     startCamera();
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach((track) => track.stop());
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,17 +216,22 @@ export function VideoRoom({
     }
   }, [currentUser?.micOn, localStream]);
 
+  // 1. Always register Trystero stream listeners (even if localStream is null)
   useEffect(() => {
-    if (!trysteroRoom || !localStream) return;
+    if (!trysteroRoom) return;
 
-    try {
-      trysteroRoom.addStream(localStream);
-    } catch (e) {
-      console.warn("Trystero addStream warning:", e);
-    }
-
-    trysteroRoom.onPeerStream = (stream: MediaStream, peerId: string) => {
-      setRemoteStreams((prev) => ({ ...prev, [peerId]: stream }));
+    trysteroRoom.onPeerStream = (
+      stream: MediaStream,
+      peerId: string,
+      metadata?: { memberId?: string }
+    ) => {
+      setRemoteStreams((prev) => {
+        const next = { ...prev, [peerId]: stream };
+        if (metadata?.memberId) {
+          next[metadata.memberId] = stream;
+        }
+        return next;
+      });
     };
 
     const originalOnPeerLeave = trysteroRoom.onPeerLeave;
@@ -221,7 +251,314 @@ export function VideoRoom({
         trysteroRoom.onPeerLeave = originalOnPeerLeave;
       }
     };
-  }, [trysteroRoom, localStream]);
+  }, [trysteroRoom]);
+
+  // 2. Push localStream via Trystero whenever localStream or room peer list updates (handles late joiners)
+  const memberSignature = members.map((m) => `${m.id}:${m.peerId || ""}`).join("|");
+  useEffect(() => {
+    if (!trysteroRoom || !localStream) return;
+    try {
+      trysteroRoom.addStream(localStream, null, { memberId: currentUserId });
+    } catch (e) {
+      console.warn("Trystero addStream warning:", e);
+    }
+  }, [trysteroRoom, localStream, currentUserId, memberSignature]);
+
+  // 3. Direct WebRTC Mesh signaled via BroadcastChannel + Firestore (guarantees media connection even if Nostr relays fail)
+  useEffect(() => {
+    const cleanRoomId = (roomId || "").trim().toLowerCase();
+    if (!cleanRoomId || !currentUserId) return;
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel(`lockin_rtc_${cleanRoomId}`);
+    } catch {}
+
+    const sendSignal = async (targetId: string, payload: any) => {
+      const msg = {
+        ...payload,
+        from: currentUserId,
+        to: targetId,
+        ts: Date.now(),
+        id: `${currentUserId}_${targetId}_${payload.type}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      };
+      try {
+        bc?.postMessage(msg);
+      } catch {}
+      try {
+        await setDoc(doc(db, "rooms", cleanRoomId, "signals", msg.id), msg);
+      } catch {}
+    };
+
+    const ensurePeerConnection = (peerMemberId: string, isInitiator: boolean) => {
+      let pc = pcsRef.current.get(peerMemberId);
+      if (pc && pc.connectionState !== "closed" && pc.connectionState !== "failed") {
+        return pc;
+      }
+      if (pc) {
+        try {
+          pc.close();
+        } catch {}
+      }
+
+      pc = new RTCPeerConnection(RTC_CONFIG);
+      pcsRef.current.set(peerMemberId, pc);
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => {
+          pc!.addTrack(track, localStreamRef.current!);
+        });
+      }
+
+      pc.ontrack = (event) => {
+        const [stream] = event.streams;
+        if (stream) {
+          setRemoteStreams((prev) => ({ ...prev, [peerMemberId]: stream }));
+        } else {
+          const fallback = new MediaStream([event.track]);
+          setRemoteStreams((prev) => ({ ...prev, [peerMemberId]: fallback }));
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendSignal(peerMemberId, {
+            type: "candidate",
+            candidate: event.candidate.toJSON(),
+          });
+        }
+      };
+
+      pc.onnegotiationneeded = async () => {
+        if (!isInitiator) return;
+        try {
+          if (pc!.signalingState !== "stable") return;
+          const offer = await pc!.createOffer();
+          if (pc!.signalingState !== "stable") return;
+          await pc!.setLocalDescription(offer);
+          await sendSignal(peerMemberId, {
+            type: "offer",
+            sdp: pc!.localDescription
+              ? { type: pc!.localDescription.type, sdp: pc!.localDescription.sdp }
+              : offer,
+          });
+        } catch {}
+      };
+
+      return pc;
+    };
+
+    const handleSignal = async (data: any) => {
+      if (!data || data.to !== currentUserId || data.from === currentUserId) return;
+      if (data.ts && data.ts < mountTimeRef.current - 5000) return;
+      if (data.id) {
+        if (processedSignalsRef.current.has(data.id)) return;
+        processedSignalsRef.current.add(data.id);
+      }
+
+      const peerId = data.from as string;
+      const isInitiator = currentUserId < peerId;
+      const pc = ensurePeerConnection(peerId, isInitiator);
+
+      try {
+        if (data.type === "offer" && data.sdp) {
+          if (pc.signalingState !== "stable") {
+            await Promise.all([
+              pc.setLocalDescription({ type: "rollback" }),
+              pc.setRemoteDescription(new RTCSessionDescription(data.sdp)),
+            ]);
+          } else {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+          }
+
+          if (localStreamRef.current) {
+            const senders = pc.getSenders();
+            localStreamRef.current.getTracks().forEach((track) => {
+              if (!senders.some((s) => s.track?.id === track.id)) {
+                pc.addTrack(track, localStreamRef.current!);
+              }
+            });
+          }
+
+          const pending = pendingCandidatesRef.current.get(peerId) || [];
+          pendingCandidatesRef.current.delete(peerId);
+          for (const cand of pending) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } catch {}
+          }
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await sendSignal(peerId, {
+            type: "answer",
+            sdp: pc.localDescription
+              ? { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+              : answer,
+          });
+        } else if (data.type === "answer" && data.sdp) {
+          if (pc.signalingState === "have-local-offer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+            const pending = pendingCandidatesRef.current.get(peerId) || [];
+            pendingCandidatesRef.current.delete(peerId);
+            for (const cand of pending) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch {}
+            }
+          }
+        } else if (data.type === "candidate" && data.candidate) {
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } else {
+            const list = pendingCandidatesRef.current.get(peerId) || [];
+            list.push(data.candidate);
+            pendingCandidatesRef.current.set(peerId, list);
+          }
+        }
+      } catch {}
+
+      if (data.id) {
+        try {
+          deleteDoc(doc(db, "rooms", cleanRoomId, "signals", data.id)).catch(() => {});
+        } catch {}
+      }
+    };
+
+    if (bc) {
+      bc.onmessage = (event) => {
+        handleSignal(event.data);
+      };
+    }
+
+    const unsubSignals = onSnapshot(
+      collection(db, "rooms", cleanRoomId, "signals"),
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            handleSignal(change.doc.data());
+          }
+        });
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubSignals();
+      try {
+        bc?.close();
+      } catch {}
+      pcsRef.current.forEach((pc) => {
+        try {
+          pc.close();
+        } catch {}
+      });
+      pcsRef.current.clear();
+    };
+  }, [roomId, currentUserId]);
+
+  // 4. Sync PeerConnections with current room members & localStream tracks
+  useEffect(() => {
+    const cleanRoomId = (roomId || "").trim().toLowerCase();
+    if (!cleanRoomId || !currentUserId) return;
+
+    const remoteMemberIds = new Set(
+      members.filter((m) => m.id !== currentUserId).map((m) => m.id)
+    );
+
+    // Clean up departed peers
+    pcsRef.current.forEach((pc, peerId) => {
+      if (!remoteMemberIds.has(peerId)) {
+        try {
+          pc.close();
+        } catch {}
+        pcsRef.current.delete(peerId);
+      }
+    });
+
+    // Attach localStream tracks or initiate offers for active peers
+    remoteMemberIds.forEach(async (peerId) => {
+      let pc = pcsRef.current.get(peerId);
+      const isInitiator = currentUserId < peerId;
+
+      if (!pc || pc.connectionState === "closed" || pc.connectionState === "failed") {
+        pc = new RTCPeerConnection(RTC_CONFIG);
+        pcsRef.current.set(peerId, pc);
+
+        pc.ontrack = (event) => {
+          const [stream] = event.streams;
+          if (stream) {
+            setRemoteStreams((prev) => ({ ...prev, [peerId]: stream }));
+          } else {
+            const fallback = new MediaStream([event.track]);
+            setRemoteStreams((prev) => ({ ...prev, [peerId]: fallback }));
+          }
+        };
+
+        pc.onicecandidate = async (event) => {
+          if (event.candidate) {
+            const msg = {
+              type: "candidate",
+              candidate: event.candidate.toJSON(),
+              from: currentUserId,
+              to: peerId,
+              ts: Date.now(),
+              id: `${currentUserId}_${peerId}_candidate_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            };
+            try {
+              const ch = new BroadcastChannel(`lockin_rtc_${cleanRoomId}`);
+              ch.postMessage(msg);
+              ch.close();
+            } catch {}
+            try {
+              await setDoc(doc(db, "rooms", cleanRoomId, "signals", msg.id), msg);
+            } catch {}
+          }
+        };
+      }
+
+      let tracksAdded = false;
+      if (localStream) {
+        const senders = pc.getSenders();
+        localStream.getTracks().forEach((track) => {
+          if (!senders.some((s) => s.track?.id === track.id)) {
+            pc!.addTrack(track, localStream);
+            tracksAdded = true;
+          }
+        });
+      }
+
+      if ((isInitiator && pc.signalingState === "stable" && !pc.remoteDescription) || (tracksAdded && pc.signalingState === "stable")) {
+        try {
+          if (!localStream && pc.getTransceivers().length === 0) {
+            pc.addTransceiver("video", { direction: "recvonly" });
+            pc.addTransceiver("audio", { direction: "recvonly" });
+          }
+          const offer = await pc.createOffer();
+          if (pc.signalingState !== "stable") return;
+          await pc.setLocalDescription(offer);
+          const msg = {
+            type: "offer",
+            sdp: pc.localDescription
+              ? { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+              : offer,
+            from: currentUserId,
+            to: peerId,
+            ts: Date.now(),
+            id: `${currentUserId}_${peerId}_offer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          };
+          try {
+            const ch = new BroadcastChannel(`lockin_rtc_${cleanRoomId}`);
+            ch.postMessage(msg);
+            ch.close();
+          } catch {}
+          try {
+            await setDoc(doc(db, "rooms", cleanRoomId, "signals", msg.id), msg);
+          } catch {}
+        } catch {}
+      }
+    });
+  }, [roomId, currentUserId, localStream, memberSignature, members]);
 
   const isMyMicOn = currentUser?.micOn ?? false;
   const isMyCameraOn = currentUser?.cameraOn ?? false;
