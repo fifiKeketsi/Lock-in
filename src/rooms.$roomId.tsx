@@ -32,6 +32,7 @@ import {
   FOCUS_SYNC_CHANNEL,
 } from "@/lib/app-blocking";
 import { playAlertNudge, playBreakChime, playStartChime } from "@/lib/sound";
+import { useProcrastinationSensors } from "@/lib/useProcrastinationSensors";
 
 export const Route = createFileRoute("/rooms/$roomId")({
   validateSearch: (search: Record<string, unknown>): { blocked?: string } => ({
@@ -104,7 +105,6 @@ export function RoomPage(): React.JSX.Element | null {
   const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit" | "blocked">("blur");
   const [blockedDomainAlert, setBlockedDomainAlert] = useState<string | null>(null);
   const [nudgeCount, setNudgeCount] = useState(0);
-  const hasTriggeredNudge = useRef(false);
 
   const myGoal = room?.members.find((m) => m.id === me.id)?.goal ?? "";
 
@@ -252,66 +252,17 @@ export function RoomPage(): React.JSX.Element | null {
   }, [liveRemaining, currentPhase, room?.timer, startTimer, stopTimer]);
 
   // Active Procrastination Nudge in Rooms
-  useEffect(() => {
-    if (!isRoomHardBlockActive) return;
-
-    const triggerNudge = (reason: "blur" | "motion" | "mouse" | "exit") => {
-      if (hasTriggeredNudge.current) return;
-      hasTriggeredNudge.current = true;
+  useProcrastinationSensors({
+    enabled: isRoomHardBlockActive,
+    cooldownMs: 10000,
+    onTrigger: (reason) => {
       setNudgeCount((c) => c + 1);
       setNudgeReason(reason);
       setShowNudgeModal(true);
       playAlertNudge();
-
-      // Send gentle accountability notice to room chat
       sendMessage(`⚠️ [Nudge] Picked up device or left focus screen during Deep Work! Returning to desk.`);
-
-      setTimeout(() => {
-        hasTriggeredNudge.current = false;
-      }, 10000);
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) triggerNudge("exit");
-    };
-
-    const handleBlur = () => {
-      triggerNudge("blur");
-    };
-
-    const handleMouseLeave = (e: MouseEvent) => {
-      if (e.clientY <= 5) triggerNudge("mouse");
-    };
-
-    let initialBeta: number | null = null;
-    let initialGamma: number | null = null;
-
-    const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
-      if (e.beta == null || e.gamma == null) return;
-      if (initialBeta === null || initialGamma === null) {
-        initialBeta = e.beta;
-        initialGamma = e.gamma;
-        return;
-      }
-      if (Math.abs(e.beta - initialBeta) > 35 || Math.abs(e.gamma - initialGamma) > 35) {
-        triggerNudge("motion");
-        initialBeta = e.beta;
-        initialGamma = e.gamma;
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("blur", handleBlur);
-    document.addEventListener("mouseleave", handleMouseLeave);
-    window.addEventListener("deviceorientation", handleDeviceOrientation);
-
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("blur", handleBlur);
-      document.removeEventListener("mouseleave", handleMouseLeave);
-      window.removeEventListener("deviceorientation", handleDeviceOrientation);
-    };
-  }, [isRoomHardBlockActive, sendMessage]);
+    },
+  });
 
   const mm = liveRemaining != null ? String(Math.floor(liveRemaining / 60000)).padStart(2, "0") : "--";
   const ss = liveRemaining != null ? String(Math.floor((liveRemaining % 60000) / 1000)).padStart(2, "0") : "--";

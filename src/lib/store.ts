@@ -429,6 +429,39 @@ function formatAuthError(err: any): string {
   return err?.message || "Authentication failed. Please try again.";
 }
 
+export function calculateNextStreak(
+  currentStreak: number,
+  lastActiveDay: string | undefined,
+  todayIsoDate: string
+): number {
+  if (!lastActiveDay) {
+    return currentStreak + 1;
+  }
+  if (lastActiveDay === todayIsoDate) {
+    return Math.max(1, currentStreak);
+  }
+  const lastDate = new Date(`${lastActiveDay}T00:00:00Z`);
+  const currDate = new Date(`${todayIsoDate}T00:00:00Z`);
+  const diffDays = Math.round((currDate.getTime() - lastDate.getTime()) / 86_400_000);
+  if (diffDays === 1) {
+    return currentStreak + 1;
+  }
+  return 1;
+}
+
+export function evaluateBadges(
+  currentBadges: string[],
+  completedCount: number,
+  streak: number
+): string[] {
+  const next = [...currentBadges];
+  if (completedCount >= 1 && !next.includes("First Step")) next.push("First Step");
+  if (completedCount >= 5 && !next.includes("On a Roll")) next.push("On a Roll");
+  if (completedCount >= 10 && !next.includes("Locked In")) next.push("Locked In");
+  if (streak >= 3 && !next.includes("3-Day Streak")) next.push("3-Day Streak");
+  return next;
+}
+
 export function useLockIn() {
   const state = useSyncExternalStore(subscribe, getSnapshot, () => defaultState);
 
@@ -458,15 +491,11 @@ export function useLockIn() {
     }
     setState((s) => {
       const today = new Date().toISOString().slice(0, 10);
-      const streak = s.lastActiveDay === today ? s.streak : s.streak + 1;
+      const streak = calculateNextStreak(s.streak, s.lastActiveDay, today);
       const xp = s.pet.xp + 20;
       const level = 1 + Math.floor(xp / 100);
-      const newBadges = [...s.badges];
       const completedCount = s.tasks.filter((t) => t.status === "completed").length + 1;
-      if (completedCount === 1 && !newBadges.includes("First Step")) newBadges.push("First Step");
-      if (completedCount === 5 && !newBadges.includes("On a Roll")) newBadges.push("On a Roll");
-      if (completedCount === 10 && !newBadges.includes("Locked In")) newBadges.push("Locked In");
-      if (streak === 3 && !newBadges.includes("3-Day Streak")) newBadges.push("3-Day Streak");
+      const newBadges = evaluateBadges(s.badges, completedCount, streak);
       return {
         ...s,
         points: s.points + 15,

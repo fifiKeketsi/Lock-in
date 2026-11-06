@@ -1,0 +1,30 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Personal User Workspace State (Tasks, Sessions, Moods, Pet, Streaks, Badges)
+    // Only the authenticated owner of the UID can read or write their document.
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // 2. Collaborative Study Rooms (Metadata, Concurrent Timer, Participants, Chat, WebRTC Signals)
+    // Open to authenticated students and invited room guests holding the room link.
+    match /rooms/{roomId} {
+      allow read, write: if true;
+
+      match /participants/{participantId} {
+        allow read, write: if true;
+      }
+
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+
+      match /signals/{signalId} {
+        allow read, write: if true;
+      }
+    }
+  }
+}
+

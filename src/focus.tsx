@@ -30,6 +30,7 @@ import {
   type ActiveFocusSessionState,
 } from "@/lib/app-blocking";
 import { playAlertNudge, playBreakChime, playStartChime } from "@/lib/sound";
+import { useProcrastinationSensors } from "@/lib/useProcrastinationSensors";
 
 export const Route = createFileRoute("/focus")({
   validateSearch: (search: Record<string, unknown>): { taskId?: string; blocked?: string } => ({
@@ -125,7 +126,6 @@ function FocusPage(): React.JSX.Element | null {
   const [showNudgeModal, setShowNudgeModal] = useState(false);
   const [nudgeReason, setNudgeReason] = useState<"blur" | "motion" | "mouse" | "exit" | "blocked">("blur");
   const [blockedDomainAlert, setBlockedDomainAlert] = useState<string | null>(null);
-  const hasTriggeredNudgeInCycle = useRef(false);
 
   // Feedback State
   const [rating, setRating] = useState(4);
@@ -369,91 +369,17 @@ function FocusPage(): React.JSX.Element | null {
   }, [running, phase, studyDuration, breakDuration, remaining]);
 
   // Active Procrastination Nudge Detection (Only triggers during active study phase)
-  useEffect(() => {
-    if (!running || phase !== "study") return;
-
-    // Request notification permission once session starts
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
-
-    const triggerNudge = (reason: "blur" | "motion" | "mouse" | "exit") => {
-      if (hasTriggeredNudgeInCycle.current) return;
-      hasTriggeredNudgeInCycle.current = true;
+  useProcrastinationSensors({
+    enabled: running && phase === "study",
+    cooldownMs: 8000,
+    showDesktopNotification: true,
+    onTrigger: (reason) => {
       setNudgesTriggered((n) => n + 1);
       setNudgeReason(reason);
       setShowNudgeModal(true);
       playAlertNudge();
-
-      // Trigger desktop notification if supported
-      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-        try {
-          new Notification("⚠️ PUT YOUR DEVICE DOWN!", {
-            body: "Your Lock-In focus timer is actively running! Return to your desk immediately.",
-            icon: "/favicon.svg",
-            requireInteraction: true,
-          });
-        } catch {}
-      }
-
-      // Reset throttle after 8 seconds
-      setTimeout(() => {
-        hasTriggeredNudgeInCycle.current = false;
-      }, 8000);
-    };
-
-    // 1. Tab switch or window minimization
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        triggerNudge("exit");
-      }
-    };
-
-    // 2. Window focus lost
-    const handleBlur = () => {
-      triggerNudge("blur");
-    };
-
-    // 3. Mouse leaving towards browser address bar/tab list
-    const handleMouseLeave = (e: MouseEvent) => {
-      if (e.clientY <= 5) {
-        triggerNudge("mouse");
-      }
-    };
-
-    // 4. Mobile physical device motion/pickup detection
-    let initialBeta: number | null = null;
-    let initialGamma: number | null = null;
-
-    const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
-      if (e.beta == null || e.gamma == null) return;
-      if (initialBeta === null || initialGamma === null) {
-        initialBeta = e.beta;
-        initialGamma = e.gamma;
-        return;
-      }
-      const deltaBeta = Math.abs(e.beta - initialBeta);
-      const deltaGamma = Math.abs(e.gamma - initialGamma);
-      // If phone tilts more than 35 degrees (picked up from desk)
-      if (deltaBeta > 35 || deltaGamma > 35) {
-        triggerNudge("motion");
-        initialBeta = e.beta;
-        initialGamma = e.gamma;
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("blur", handleBlur);
-    document.addEventListener("mouseleave", handleMouseLeave);
-    window.addEventListener("deviceorientation", handleDeviceOrientation);
-
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("blur", handleBlur);
-      document.removeEventListener("mouseleave", handleMouseLeave);
-      window.removeEventListener("deviceorientation", handleDeviceOrientation);
-    };
-  }, [running, phase]);
+    },
+  });
 
   const handleToggleRunning = () => {
     if (!state.user) {
